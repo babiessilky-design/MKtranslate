@@ -178,6 +178,8 @@ task_subtitle.*
 *.mp4
 *.ogg
 *.wav
+!assets/*
+!voice_library/*
 *.mkv
 *.webm
 *.avi

@@ -1,4 +1,6 @@
 # Chatterbox Multilingual Dependencies
+onnx>=1.14.0
+omegaconf>=2.3.0
 s3tokenizer>=0.2.0
 resemble-perth>=1.0.1
 conformer>=0.3.2

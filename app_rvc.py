@@ -2631,45 +2631,46 @@ def create_gui(theme, logs_in_gui=False):
                             placeholder=lg_conf["ht_token_ph"],
                         )
 
-                    gr.Examples(
-                        examples=[
-                            [
-                                ["./assets/Video_main.mp4"],
-                                "",
-                                "",
-                                "",
-                                False,
-                                whisper_model_default,
-                                4,
-                                com_t_default,
-                                "Spanish (es)",
-                                "English (en)",
-                                1,
-                                2,
-                                "en-CA-ClaraNeural-Female",
-                                "en-AU-WilliamNeural-Male",
+                    if os.path.exists("./assets/Video_main.mp4"):
+                        gr.Examples(
+                            examples=[
+                                [
+                                    ["./assets/Video_main.mp4"],
+                                    "",
+                                    "",
+                                    "",
+                                    False,
+                                    whisper_model_default,
+                                    4,
+                                    com_t_default,
+                                    "Spanish (es)",
+                                    "English (en)",
+                                    1,
+                                    2,
+                                    "en-CA-ClaraNeural-Female",
+                                    "en-AU-WilliamNeural-Male",
+                                ],
+                            ],  # no update
+                            fn=SoniTr.batch_multilingual_media_conversion,
+                            inputs=[
+                                video_input,
+                                blink_input,
+                                directory_input,
+                                HFKEY,
+                                PREVIEW,
+                                WHISPER_MODEL_SIZE,
+                                batch_size,
+                                compute_type,
+                                SOURCE_LANGUAGE,
+                                TRANSLATE_AUDIO_TO,
+                                min_speakers,
+                                max_speakers,
+                                tts_voice00,
+                                tts_voice01,
                             ],
-                        ],  # no update
-                        fn=SoniTr.batch_multilingual_media_conversion,
-                        inputs=[
-                            video_input,
-                            blink_input,
-                            directory_input,
-                            HFKEY,
-                            PREVIEW,
-                            WHISPER_MODEL_SIZE,
-                            batch_size,
-                            compute_type,
-                            SOURCE_LANGUAGE,
-                            TRANSLATE_AUDIO_TO,
-                            min_speakers,
-                            max_speakers,
-                            tts_voice00,
-                            tts_voice01,
-                        ],
-                        outputs=[video_output],
-                        cache_examples=False,
-                    )
+                            outputs=[video_output],
+                            cache_examples=False,
+                        )
 
         with gr.Tab(lg_conf["tab_docs"]):
             with gr.Column():
