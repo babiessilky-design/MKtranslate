@@ -112,6 +112,17 @@ def robust_fd_hf_download(*args, **kwargs):
 
 huggingface_hub.hf_hub_download = robust_hf_download
 huggingface_hub.file_download.hf_hub_download = robust_fd_hf_download
+
+# 8. Correctif de compatibilité NumPy 2.0 pour pyannote et whisperx
+import numpy as np
+if not hasattr(np, "NaN"):
+    np.NaN = np.nan
+if not hasattr(np, "NAN"):
+    np.NAN = np.nan
+if not hasattr(np, "float"):
+    np.float = float
+if not hasattr(np, "int"):
+    np.int = int
 # ==============================================================================
 import gradio as gr
 from soni_translate.logging_setup import (
