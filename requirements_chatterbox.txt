@@ -1,0 +1,11 @@
+# Chatterbox Multilingual Dependencies
+s3tokenizer>=0.2.0
+resemble-perth>=1.0.1
+conformer>=0.3.2
+safetensors>=0.5.3
+spacy-pkuseg
+pykakasi>=2.3.0
+pyloudnorm>=0.1.1
+soundfile>=0.12.1
+diffusers>=0.29.0
+librosa>=0.10.0
