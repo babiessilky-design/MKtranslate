@@ -1,8 +1,13 @@
-import ffmpeg
+try:
+    import ffmpeg
+except ImportError:
+    ffmpeg = None
 import numpy as np
 
 
 def load_audio(file, sr):
+    if ffmpeg is None:
+        raise RuntimeError("ffmpeg-python is not installed. Please run: pip install ffmpeg-python")
     try:
         # https://github.com/openai/whisper/blob/main/whisper/audio.py#L26
         # This launches a subprocess to decode audio while down-mixing and resampling as necessary.
