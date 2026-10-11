@@ -1,3 +1,5 @@
+onnx>=1.14.0
+omegaconf>=2.3.0
 praat-parselmouth>=0.4.3
 google-generativeai
 groq

@@ -1,4 +1,7 @@
 # Temporal requirements
+numpy<2.0.0,>=1.24.0
+onnx>=1.14.0
+omegaconf>=2.3.0
 nest_asyncio
 --extra-index-url https://download.pytorch.org/whl/cu118
 torch>=2.1.0+cu118
