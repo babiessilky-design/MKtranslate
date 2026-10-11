@@ -115,13 +115,13 @@ huggingface_hub.file_download.hf_hub_download = robust_fd_hf_download
 
 # 8. Correctif de compatibilité NumPy 2.0 pour pyannote et whisperx
 import numpy as np
-if not hasattr(np, "NaN"):
+if "NaN" not in np.__dict__:
     np.NaN = np.nan
-if not hasattr(np, "NAN"):
+if "NAN" not in np.__dict__:
     np.NAN = np.nan
-if not hasattr(np, "float"):
+if "float" not in np.__dict__:
     np.float = float
-if not hasattr(np, "int"):
+if "int" not in np.__dict__:
     np.int = int
 # ==============================================================================
 import gradio as gr

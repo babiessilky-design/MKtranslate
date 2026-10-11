@@ -1,4 +1,8 @@
-import os, zipfile, rarfile, shutil, subprocess, shlex, sys # noqa
+import os, zipfile, shutil, subprocess, shlex, sys # noqa
+try:
+    import rarfile
+except ImportError:
+    rarfile = None
 from .logging_setup import logger
 from urllib.parse import urlparse
 from IPython.utils import capture
@@ -214,10 +218,13 @@ def select_zip_and_rar_files(directory_path="downloads/"):
         with zipfile.ZipFile(file_path, "r") as zip_ref:
             zip_ref.extractall(directory_path)
 
-    for file_name in rar_files:
-        file_path = os.path.join(directory_path, file_name)
-        with rarfile.RarFile(file_path, "r") as rar_ref:
-            rar_ref.extractall(directory_path)
+    if rar_files and rarfile is not None:
+        for file_name in rar_files:
+            file_path = os.path.join(directory_path, file_name)
+            with rarfile.RarFile(file_path, "r") as rar_ref:
+                rar_ref.extractall(directory_path)
+    elif rar_files:
+        logger.warning("rarfile is not installed, cannot extract .rar files.")
 
     # set in path
     def move_files_with_extension(src_dir, extension, destination_dir):

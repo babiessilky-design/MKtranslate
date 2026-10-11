@@ -13,3 +13,5 @@ gradio_client==0.10.1
 IPython
 fastapi==0.112.2
 transformers<=4.39.3
+rarfile
+soundfile
