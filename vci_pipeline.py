@@ -1,8 +1,24 @@
-import numpy as np, parselmouth, torch, pdb, sys
+import numpy as np, torch, pdb, sys
+try:
+    import parselmouth
+except ImportError:
+    parselmouth = None
 from time import time as ttime
 import torch.nn.functional as F
 import scipy.signal as signal
-import pyworld, os, traceback, faiss, librosa, torchcrepe
+import os, traceback, librosa
+try:
+    import pyworld
+except ImportError:
+    pyworld = None
+try:
+    import faiss
+except ImportError:
+    faiss = None
+try:
+    import torchcrepe
+except ImportError:
+    torchcrepe = None
 from scipy import signal
 from functools import lru_cache
 from soni_translate.logging_setup import logger

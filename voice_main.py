@@ -24,8 +24,15 @@ from soni_translate.utils import (
 )
 from scipy import signal
 from time import time as ttime
-import faiss
-from vci_pipeline import VC, change_rms, bh, ah
+try:
+    import faiss
+except ImportError:
+    faiss = None
+
+try:
+    from vci_pipeline import VC, change_rms, bh, ah
+except ImportError:
+    VC, change_rms, bh, ah = None, None, None, None
 import librosa
 
 warnings.filterwarnings("ignore")
