@@ -492,6 +492,18 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
                         generated_successfully = True
             except Exception as e:
                 logger.error(f"Custom Cloning Error ({voice_name}) with {cloning_engine}: {str(e)}")
+
+        # --- Filet de sécurité absolue anti-crash ---
+        # Si aucun fichier n'a été produit (erreur sur ce segment précis), on génère un silence
+        if not os.path.exists(output_file) or os.path.getsize(output_file) == 0:
+            try:
+                os.makedirs(os.path.dirname(output_file), exist_ok=True)
+                seg_dur = max(0.5, float(segment.get("end", start + 1.0)) - float(start))
+                silence_arr = np.zeros(int(seg_dur * 24000), dtype=np.float32)
+                sf.write(output_file, silence_arr, 24000)
+                logger.warning(f"Audio de secours (silence de {seg_dur:.2f}s) créé pour {output_file}")
+            except Exception as err_sil:
+                logger.error(f"Impossible de créer le silence de secours: {err_sil}")
             
         # --- ÉTAPE B : ENREGISTREMENT DANS LE CACHE PERSISTANT APRÈS GÉNÉRATION ---
         if generated_successfully and os.path.exists(output_file):

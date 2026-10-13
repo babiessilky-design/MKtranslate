@@ -118,25 +118,37 @@ class AlignmentStreamAnalyzer:
         # Hallucinations at the start of speech show up as activations at the bottom of the attention maps!
         # To mitigate this, we just wait until there are no activations far off-diagonal in the last 2 tokens,
         # and there are some strong activations in the first few tokens.
-        false_start = (not self.started) and (A[-2:, -2:].max() > 0.1 or A[:, :4].max() < 0.5)
+        false_start = False
+        if not self.started:
+            cond1 = (A[-2:, -2:].max() > 0.1).item() if A.size(0) >= 2 and A.size(1) >= 2 else False
+            cond2 = (A[:, :min(4, S)].max() < 0.5).item() if S > 0 and A[:, :min(4, S)].numel() > 0 else False
+            false_start = cond1 or cond2
         self.started = not false_start
         if self.started and self.started_at is None:
             self.started_at = T
 
         # Is generation likely complete?
-        self.complete = self.complete or self.text_position >= S - 3
+        self.complete = self.complete or self.text_position >= max(0, S - 3)
         if self.complete and self.completed_at is None:
             self.completed_at = T
 
         # NOTE: EOS rarely assigned activations, and second-last token is often punctuation, so use last 3 tokens.
         # NOTE: due to the false-start behaviour, we need to make sure we skip activations for the first few tokens.
-        last_text_token_duration = A[15:, -3:].sum()
+        last_text_token_duration = A[15:, -min(3, S):].sum() if A.size(0) > 15 and S > 0 else torch.tensor(0.0)
 
         # Activations for the final token that last too long are likely hallucinations.
-        long_tail = self.complete and (A[self.completed_at:, -3:].sum(dim=0).max() >= 5) # 200ms
+        long_tail = False
+        if self.complete and self.completed_at is not None and self.completed_at < T and S >= 1:
+            tail_slice = A[self.completed_at:, -min(3, S):]
+            if tail_slice.numel() > 0:
+                long_tail = bool((tail_slice.sum(dim=0).max() >= 5).item())
 
         # If there are activations in previous tokens after generation has completed, assume this is a repetition error.
-        alignment_repetition = self.complete and (A[self.completed_at:, :-5].max(dim=1).values.sum() > 5)
+        alignment_repetition = False
+        if self.complete and self.completed_at is not None and self.completed_at < T and S > 5:
+            rep_slice = A[self.completed_at:, :-5]
+            if rep_slice.size(0) > 0 and rep_slice.size(1) > 0:
+                alignment_repetition = bool((rep_slice.max(dim=1).values.sum() > 5).item())
         
         # Track generated tokens for repetition detection
         if next_token is not None:
