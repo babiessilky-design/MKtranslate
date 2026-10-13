@@ -53,14 +53,16 @@ class T3(nn.Module):
         super().__init__()
         self.hp = hp
 
-        config_dict = LLAMA_CONFIGS[hp.llama_config_name]
+        config_dict = dict(LLAMA_CONFIGS[hp.llama_config_name])
         self.is_gpt = config_dict.get("model_type") == "gpt2"
 
         if self.is_gpt:
             self.cfg = GPT2Config(**config_dict)
             self.tfmr = GPT2Model(self.cfg)
         else:
+            config_dict["attn_implementation"] = "eager"
             self.cfg = LlamaConfig(**config_dict)
+            self.cfg._attn_implementation = "eager"
             self.tfmr = LlamaModel(self.cfg)
 
         self.dim = self.cfg.hidden_size

@@ -123,6 +123,33 @@ if "float" not in np.__dict__:
     np.float = float
 if "int" not in np.__dict__:
     np.int = int
+
+# 9. Auto-vérification et installation transparente des modules d'exécution
+import subprocess
+import sys
+
+_REQUIRED_PACKAGES = {
+    "soxr": "soxr",
+    "srt": "srt",
+    "rarfile": "rarfile",
+    "ffmpeg": "ffmpeg-python",
+    "faiss": "faiss-cpu",
+    "parselmouth": "praat-parselmouth",
+    "pyworld": "pyworld",
+    "torchcrepe": "torchcrepe",
+    "onnx": "onnx",
+    "omegaconf": "omegaconf"
+}
+
+for mod, pkg in _REQUIRED_PACKAGES.items():
+    try:
+        __import__(mod)
+    except ImportError:
+        print(f"[Auto-Fix] Installation automatique du module manquant : {pkg}...")
+        try:
+            subprocess.run([sys.executable, "-m", "pip", "install", "-q", pkg], check=True)
+        except Exception as e:
+            print(f"[Auto-Fix] Avertissement: Impossible d'installer {pkg}: {e}")
 # ==============================================================================
 import gradio as gr
 from soni_translate.logging_setup import (

@@ -64,12 +64,32 @@ class ChatterBoxProvider(BaseTTSProvider):
             if os.path.exists(_chatterbox_src) and _chatterbox_src not in sys.path:
                 sys.path.insert(0, _chatterbox_src)
 
+            # Garantir l'utilisation de 'eager' attention pour la compatibilité output_attentions=True
+            try:
+                import chatterbox.models.t3.llama_configs as lc
+                if hasattr(lc, "LLAMA_520M_CONFIG_DICT"):
+                    lc.LLAMA_520M_CONFIG_DICT["attn_implementation"] = "eager"
+                if hasattr(lc, "LLAMA_CONFIGS") and "Llama_520M" in lc.LLAMA_CONFIGS:
+                    lc.LLAMA_CONFIGS["Llama_520M"]["attn_implementation"] = "eager"
+            except Exception:
+                pass
+
             from chatterbox.mtl_tts import ChatterboxMultilingualTTS
             
             # Chargement natif du modèle Chatterbox Multilingual
             CHATTERBOX_MODEL_CACHE = ChatterboxMultilingualTTS.from_pretrained(
                 device=self.device
             )
+
+            # S'assurer que les modèles et backends instanciés ont bien eager attention
+            if hasattr(CHATTERBOX_MODEL_CACHE, "t3"):
+                t3_mod = CHATTERBOX_MODEL_CACHE.t3
+                if hasattr(t3_mod, "cfg"):
+                    t3_mod.cfg._attn_implementation = "eager"
+                if hasattr(t3_mod, "tfmr") and hasattr(t3_mod.tfmr, "config"):
+                    t3_mod.tfmr.config._attn_implementation = "eager"
+                if hasattr(t3_mod, "patched_model") and hasattr(t3_mod.patched_model, "config"):
+                    t3_mod.patched_model.config._attn_implementation = "eager"
         return CHATTERBOX_MODEL_CACHE
 
     def find_reference_audio(self, voice_name):
