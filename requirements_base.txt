@@ -24,3 +24,5 @@ ffmpeg-python>=0.2.0
 praat-parselmouth>=0.4.3
 torchcrepe==0.0.20
 faiss-cpu==1.7.3
+pyworld==0.3.2
+soxr
