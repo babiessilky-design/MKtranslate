@@ -1255,7 +1255,7 @@ class SoniTranslate(SoniTrCache):
             if self.result["segments"] == []:
                 raise ValueError("No active speech found in audio")
 
-            if not self.task_in_cache("break_align", [
+            if transcriber_model != "Gemini 3.5 Transcribe" and not self.task_in_cache("break_align", [
                 divide_text_segments_by,
                 text_segmentation_scale,
                 self.align_language

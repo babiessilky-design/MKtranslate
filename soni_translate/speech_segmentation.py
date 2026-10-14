@@ -131,6 +131,145 @@ def openai_api_whisper(
     return audio, result
 
 
+def parse_gemini_transcription(text_resp, default_lang="en", audio_duration=None):
+    """
+    Parse la sortie textuelle de Gemini (JSON, markdown, ou format horodaté)
+    et extrait les segments avec 'start', 'end', 'text', 'speaker' (SPEAKER_00, SPEAKER_01...).
+    """
+    text_resp = (text_resp or "").strip()
+    if not text_resp:
+        return [], default_lang
+
+    # 1. Tentatives d'extraction et de parsing JSON
+    json_candidates = []
+
+    # Nettoyage direct des balises markdown ```json ... ```
+    clean_md = text_resp
+    if "```" in clean_md:
+        clean_md = re.sub(r"^```(?:json)?\s*", "", clean_md, flags=re.MULTILINE)
+        clean_md = re.sub(r"\s*```$", "", clean_md, flags=re.MULTILINE)
+        clean_md = clean_md.strip()
+        json_candidates.append(clean_md)
+
+    json_candidates.append(text_resp)
+
+    # Recherche d'un objet JSON contenant "segments"
+    m_obj = re.search(r'\{[\s\S]*"segments"[\s\S]*\}', text_resp)
+    if m_obj:
+        json_candidates.append(m_obj.group(0))
+
+    # Recherche d'une liste JSON [...]
+    m_list = re.search(r'\[[\s\S]*\]', text_resp)
+    if m_list:
+        json_candidates.append(m_list.group(0))
+
+    parsed_data = None
+    for cand in json_candidates:
+        try:
+            parsed_data = json.loads(cand)
+            if isinstance(parsed_data, (dict, list)):
+                break
+        except Exception:
+            continue
+
+    raw_segments = []
+    detected_lang = default_lang
+
+    if isinstance(parsed_data, dict):
+        raw_segments = parsed_data.get("segments", [])
+        detected_lang = parsed_data.get("language", default_lang)
+    elif isinstance(parsed_data, list):
+        raw_segments = parsed_data
+
+    formatted_segments = []
+    if raw_segments:
+        for seg in raw_segments:
+            if not isinstance(seg, dict):
+                continue
+            if "start" in seg and "end" in seg and "text" in seg:
+                try:
+                    start_val = float(seg["start"])
+                    end_val = float(seg["end"])
+                except (ValueError, TypeError):
+                    continue
+                if end_val <= start_val:
+                    end_val = start_val + 0.5
+                spk_raw = seg.get("speaker", "SPEAKER_00")
+                spk_nums = re.findall(r'\d+', str(spk_raw))
+                spk = f"SPEAKER_{int(spk_nums[0]):02d}" if spk_nums else "SPEAKER_00"
+
+                text_val = str(seg["text"]).strip()
+                if text_val:
+                    formatted_segments.append({
+                        "start": round(start_val, 2),
+                        "end": round(end_val, 2),
+                        "text": text_val,
+                        "speaker": spk
+                    })
+
+    # 2. Si aucun segment JSON valide, parser les lignes horodatées (ex: [00:01.25 -> 00:04.50] SPEAKER_00: Texte)
+    if not formatted_segments:
+        logger.info("Parsing ligne par ligne de la transcription Gemini...")
+        time_pattern = re.compile(
+            r'(?:\[|\()?\s*(\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?|\d+(?:[.,]\d+)?)\s*(?:-->|->|-)\s*(\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?|\d+(?:[.,]\d+)?)\s*(?:\]|\))?'
+            r'(?:\s*\[?(?:SPEAKER|Speaker|locuteur|Intervenant)?\s*[_#:\-]?\s*(\d+)\]?)?'
+            r'[:\s]+(.*)',
+            re.IGNORECASE
+        )
+
+        def parse_time(s):
+            s = s.strip().replace(",", ".")
+            parts = s.split(":")
+            if len(parts) == 3:
+                return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+            elif len(parts) == 2:
+                return float(parts[0]) * 60 + float(parts[1])
+            return float(s)
+
+        for line in text_resp.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            m = time_pattern.match(line)
+            if m:
+                try:
+                    t_start = parse_time(m.group(1))
+                    t_end = parse_time(m.group(2))
+                    spk_idx = m.group(3)
+                    spk = f"SPEAKER_{int(spk_idx):02d}" if spk_idx else "SPEAKER_00"
+                    txt = m.group(4).strip()
+                    if t_end <= t_start:
+                        t_end = t_start + 0.5
+                    if txt:
+                        formatted_segments.append({
+                            "start": round(t_start, 2),
+                            "end": round(t_end, 2),
+                            "text": txt,
+                            "speaker": spk
+                        })
+                except Exception:
+                    continue
+
+    # 3. Fallback si texte brut sans horodatage
+    if not formatted_segments and text_resp:
+        logger.warning("Gemini a renvoyé du texte brut. Synthèse des segments...")
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text_resp) if s.strip()]
+        total_dur = audio_duration if audio_duration and audio_duration > 0 else (len(sentences) * 3.0)
+        dur_per_s = total_dur / max(len(sentences), 1)
+        cur_time = 0.0
+        for s in sentences:
+            end_time = min(cur_time + dur_per_s, total_dur)
+            formatted_segments.append({
+                "start": round(cur_time, 2),
+                "end": round(end_time, 2),
+                "text": s,
+                "speaker": "SPEAKER_00"
+            })
+            cur_time = end_time
+
+    return formatted_segments, detected_lang
+
+
 def gemini_api_transcribe(
     input_audio_file,
     source_lang=None,
@@ -147,10 +286,20 @@ def gemini_api_transcribe(
 
     logger.info(f"Gemini Transcribe : Traitement du fichier '{input_audio_file}'...")
 
+    audio = None
+    audio_duration = None
     try:
         audio = whisperx.load_audio(input_audio_file)
+        if audio is not None and len(audio) > 0:
+            audio_duration = len(audio) / 16000.0
     except Exception:
         audio = None
+        try:
+            import soundfile as sf
+            info = sf.info(input_audio_file)
+            audio_duration = info.duration
+        except Exception:
+            pass
 
     from google import genai
     from google.genai import types
@@ -159,20 +308,40 @@ def gemini_api_transcribe(
 
     # Upload du fichier audio via Files API de Gemini
     uploaded_file = client.files.upload(file=input_audio_file)
+
+    # Attente si le fichier est en cours de traitement
+    try:
+        if hasattr(uploaded_file, "state"):
+            while getattr(uploaded_file.state, "name", str(uploaded_file.state)) == "PROCESSING":
+                logger.info("En attente du traitement du fichier audio par Gemini...")
+                time.sleep(2)
+                uploaded_file = client.files.get(name=uploaded_file.name)
+            if getattr(uploaded_file.state, "name", str(uploaded_file.state)) == "FAILED":
+                raise ValueError("Le traitement du fichier audio par Gemini a échoué.")
+    except Exception as e_poll:
+        logger.debug(f"Vérification de l'état du fichier ignorée ({e_poll})")
+
     try:
         candidate_models = [
-            model_name,
-            os.environ.get("GEMINI_TRANSCRIBE_MODEL", "gemini-3.5-transcribe"),
+            os.environ.get("GEMINI_TRANSCRIBE_MODEL", model_name),
+            "gemini-3.5-transcribe",
+            "gemini-3.8-flash",
+            "gemini-3.7-flash",
+            "gemini-3.5-flash",
+            "gemini-3.8-pro",
             "gemini-2.5-flash",
             "gemini-2.0-flash",
-            "gemini-1.5-flash"
         ]
         unique_models = []
         for m in candidate_models:
             if m and m not in unique_models:
                 unique_models.append(m)
 
-        lang_instruction = f"The source language is {source_lang}." if source_lang and source_lang != "Automatic detection" else "Auto-detect the spoken language."
+        lang_instruction = (
+            f"The source language is {source_lang}."
+            if source_lang and source_lang != "Automatic detection"
+            else "Detect the primary spoken language and set 'language' to its ISO-639-1 code."
+        )
 
         prompt = f"""You are an expert speech recognition and speaker diarization engine.
 Transcribe the provided audio accurately.
@@ -203,71 +372,80 @@ CRITICAL RULES:
 
         response = None
         last_error = None
+        response_text = ""
+
+        def extract_text(resp):
+            if not resp:
+                return ""
+            if hasattr(resp, "text") and resp.text:
+                return resp.text
+            if hasattr(resp, "candidates") and resp.candidates:
+                cand = resp.candidates[0]
+                if hasattr(cand, "content") and hasattr(cand.content, "parts"):
+                    parts = [p.text for p in cand.content.parts if hasattr(p, "text") and p.text]
+                    if parts:
+                        return "\n".join(parts)
+            return ""
+
         for mod in unique_models:
             try:
                 logger.info(f"Gemini Transcribe : Tentative avec le modèle '{mod}'...")
-                config = types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.1,
-                )
-                response = client.models.generate_content(
-                    model=mod,
-                    contents=[uploaded_file, prompt],
-                    config=config
-                )
-                if response and response.text:
+
+                if "transcribe" in mod.lower():
+                    # Le modèle dédié de transcription ne supporte PAS response_mime_type="application/json"
+                    logger.info(f"Mode audio direct sans contrainte JSON pour '{mod}'...")
+                    try:
+                        response = client.models.generate_content(
+                            model=mod,
+                            contents=[uploaded_file, prompt]
+                        )
+                    except Exception as err_prompt:
+                        logger.warning(f"Appel avec prompt sur '{mod}' a échoué ({err_prompt}), tentative audio seul...")
+                        response = client.models.generate_content(
+                            model=mod,
+                            contents=[uploaded_file]
+                        )
+                else:
+                    # Modèles multimodaux généraux (gemini-3.8-flash, etc.) : support du mode JSON
+                    try:
+                        config = types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            temperature=0.1,
+                        )
+                        response = client.models.generate_content(
+                            model=mod,
+                            contents=[uploaded_file, prompt],
+                            config=config
+                        )
+                    except Exception as err_json:
+                        logger.warning(f"Mode JSON refusé pour '{mod}' ({err_json}), tentative sans config JSON...")
+                        response = client.models.generate_content(
+                            model=mod,
+                            contents=[uploaded_file, prompt]
+                        )
+
+                response_text = extract_text(response)
+                if response_text.strip():
                     logger.info(f"Gemini Transcribe : Succès avec le modèle '{mod}' !")
                     break
-            except Exception as e:
-                if "transcribe" in mod and hasattr(client, "interactions"):
-                    try:
-                        inter_resp = client.interactions.create(
-                            model=mod,
-                            input=[{"type": "audio", "uri": uploaded_file.uri}],
-                        )
-                        if inter_resp and hasattr(inter_resp, "text"):
-                            response = inter_resp
-                            logger.info(f"Gemini Transcribe (interactions) : Succès avec '{mod}' !")
-                            break
-                    except Exception as err_inter:
-                        logger.warning(f"Échec interactions ({err_inter})")
+                else:
+                    logger.warning(f"Modèle '{mod}' a renvoyé une réponse vide.")
 
+            except Exception as e:
                 logger.warning(f"Modèle '{mod}' indisponible ({e}). Bascule sur le modèle suivant...")
                 last_error = e
 
-        if not response or not response.text:
+        if not response_text.strip():
             raise RuntimeError(f"Échec de la transcription Gemini sur tous les modèles: {last_error}")
 
-        # Nettoyage et parsing JSON
-        text_resp = response.text.strip()
-        if text_resp.startswith("```json"):
-            text_resp = text_resp[7:]
-        if text_resp.endswith("```"):
-            text_resp = text_resp[:-3]
-        text_resp = text_resp.strip()
+        formatted_segments, detected_lang = parse_gemini_transcription(
+            response_text,
+            default_lang=source_lang or "en",
+            audio_duration=audio_duration
+        )
 
-        data = json.loads(text_resp)
-        segments = data.get("segments", [])
-        detected_lang = data.get("language", source_lang or "en")
-
-        formatted_segments = []
-        for seg in segments:
-            if "start" in seg and "end" in seg and "text" in seg:
-                start_val = float(seg["start"])
-                end_val = float(seg["end"])
-                if end_val <= start_val:
-                    end_val = start_val + 0.5
-                spk = seg.get("speaker", "SPEAKER_00")
-                if not str(spk).startswith("SPEAKER_"):
-                    spk_num = re.findall(r'\d+', str(spk))
-                    spk = f"SPEAKER_{int(spk_num[0]):02d}" if spk_num else "SPEAKER_00"
-
-                formatted_segments.append({
-                    "start": round(start_val, 2),
-                    "end": round(end_val, 2),
-                    "text": str(seg["text"]).strip(),
-                    "speaker": spk
-                })
+        if not formatted_segments:
+            raise ValueError(f"Impossible d'extraire des segments de la réponse Gemini. Réponse brute: {response_text[:300]}")
 
         logger.info(f"Gemini Transcribe : {len(formatted_segments)} segments transcrits et diarizés avec succès.")
         result = {
