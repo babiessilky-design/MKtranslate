@@ -1,6 +1,7 @@
 import os
 import sys
 import torch
+import numpy as np
 import soundfile as sf
 from .base import BaseTTSProvider
 
@@ -10,8 +11,9 @@ _omnivoice_src = os.path.join(_base_dir, "omnivoice")
 if os.path.exists(_omnivoice_src) and _omnivoice_src not in sys.path:
     sys.path.insert(0, _omnivoice_src)
 
-# Cache global de session pour garder le modèle chargé en mémoire vive
+# Cache global de session pour garder le modèle et les profils de voix en mémoire vive
 OMNIVOICE_MODEL_CACHE = None
+OMNIVOICE_PROMPT_CACHE = {}
 
 
 class OmniVoiceProvider(BaseTTSProvider):
@@ -20,6 +22,25 @@ class OmniVoiceProvider(BaseTTSProvider):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         # Dossier de stockage des poids du modèle dans SoniTranslate
         self.local_dir = "weights/OmniVoice"
+
+    def get_language_id(self, target_lang):
+        """Mappe la langue de SoniTranslate vers le code ISO à 2 lettres reconnu par OmniVoice"""
+        mapping = {
+            "fr": "fr", "fra": "fr", "french": "fr", "français": "fr",
+            "en": "en", "eng": "en", "english": "en", "anglais": "en",
+            "es": "es", "spa": "es", "spanish": "es", "espagnol": "es",
+            "de": "de", "deu": "de", "german": "de", "allemand": "de",
+            "it": "it", "ita": "it", "italian": "it", "italien": "it",
+            "pt": "pt", "por": "pt", "portuguese": "pt", "portugais": "pt",
+            "ru": "ru", "rus": "ru", "russian": "ru", "russe": "ru",
+            "zh": "zh", "zho": "zh", "chinese": "zh", "chinois": "zh",
+            "ja": "ja", "jpn": "ja", "japanese": "ja", "japonais": "ja",
+            "ko": "ko", "kor": "ko", "korean": "ko", "coréen": "ko",
+            "ar": "ar", "ara": "ar", "arabic": "ar", "arabe": "ar",
+            "hi": "hi", "hin": "hi", "hindi": "hi"
+        }
+        clean_lang = str(target_lang).lower().strip()
+        return mapping.get(clean_lang, clean_lang[:2] if len(clean_lang) >= 2 else "en")
 
     def load_model(self):
         """Charge le modèle OmniVoice en mémoire vive une seule fois."""
@@ -47,36 +68,33 @@ class OmniVoiceProvider(BaseTTSProvider):
                 device_map=self.device,
                 dtype=torch.float32 if self.device == 'cpu' else torch.float16
             )
+            self.logger.info("OmniVoice model loaded successfully.")
         return OMNIVOICE_MODEL_CACHE
 
-    def generate(self, text, voice, target_lang, output_file, **kwargs):
-        model = self.load_model()
-        
-        # Le nom de la voix passée est sous la forme : "Custom/Moussa_FR"
-        voice_name = voice.split("/")[-1]
-        
-        # Récupération de l'audio de référence et du texte associé dans la Voice Library
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    def find_reference_materials(self, voice_name):
+        """Localise intelligemment le fichier audio de référence et son texte associé."""
         voice_lib_dirs = [
-            os.path.join(base_dir, "voice_library"),
-            os.path.join(base_dir, "soni_translate", "voice_library"),
+            os.path.join(_base_dir, "voice_library"),
+            os.path.join(_base_dir, "soni_translate", "voice_library"),
             "voice_library",
             os.path.join("soni_translate", "voice_library"),
             "/content/SoniTranslate/voice_library",
         ]
         
         ref_audio = None
+        ref_text = None
         ref_txt_path = None
+        
         for vdir in voice_lib_dirs:
             if not os.path.exists(vdir):
                 continue
             for ext in [".wav", ".mp3", ".flac"]:
                 cand = os.path.join(vdir, f"{voice_name}{ext}")
                 if os.path.exists(cand):
-                    ref_audio = cand
+                    ref_audio = os.path.abspath(cand)
                     cand_txt = os.path.join(vdir, f"{voice_name}.txt")
                     if os.path.exists(cand_txt):
-                        ref_txt_path = cand_txt
+                        ref_txt_path = os.path.abspath(cand_txt)
                     break
             if ref_audio:
                 break
@@ -86,28 +104,111 @@ class OmniVoiceProvider(BaseTTSProvider):
                 for vdir in voice_lib_dirs:
                     cand = os.path.join(vdir, f"{fallback_name}.wav")
                     if os.path.exists(cand):
-                        ref_audio = cand
+                        ref_audio = os.path.abspath(cand)
+                        cand_txt = os.path.join(vdir, f"{fallback_name}.txt")
+                        if os.path.exists(cand_txt):
+                            ref_txt_path = os.path.abspath(cand_txt)
                         break
                 if ref_audio:
                     break
 
         if not ref_audio:
-            raise FileNotFoundError(f"Reference audio not found in voice library: {voice_name}")
-            
+            raise FileNotFoundError(f"Reference audio not found for voice: {voice_name}")
+
         if ref_txt_path and os.path.exists(ref_txt_path):
             with open(ref_txt_path, "r", encoding="utf-8") as f:
-                ref_text = f.read().strip()
-        else:
-            ref_text = "Hello there." # Fallback par défaut si pas de fichier texte
-            
-        # Génération de l'audio
-        # OmniVoice renvoie une liste de waveforms, on prend la première [0]
+                content = f.read().strip()
+                if content:
+                    ref_text = content
+
+        return ref_audio, ref_text, ref_txt_path
+
+    def generate(self, text, voice, target_lang, output_file, **kwargs):
+        model = self.load_model()
+        from omnivoice import OmniVoiceGenerationConfig
+        
+        # Le nom de la voix passée est sous la forme : "Custom/ref_homme_fr" ou "ref_homme_fr"
+        voice_name = voice.split("/")[-1] if "/" in voice else voice
+        
+        # Récupération de l'audio de référence et du texte associé
+        ref_audio, ref_text, ref_txt_path = self.find_reference_materials(voice_name)
+        lang_id = self.get_language_id(target_lang)
+
+        # Gestion et mise en cache du VoiceClonePrompt pour garantir une voix 100% cohérente et fidèle
+        global OMNIVOICE_PROMPT_CACHE
+        if OMNIVOICE_PROMPT_CACHE is None:
+            OMNIVOICE_PROMPT_CACHE = {}
+
+        prompt = OMNIVOICE_PROMPT_CACHE.get(ref_audio)
+        if prompt is None:
+            self.logger.info(f"OmniVoice : Création et encodage du profil vocal pour '{voice_name}'...")
+            prompt = model.create_voice_clone_prompt(
+                ref_audio=ref_audio,
+                ref_text=ref_text,  # Si None, OmniVoice transcrit automatiquement l'audio fidèlement
+                preprocess_prompt=True
+            )
+            OMNIVOICE_PROMPT_CACHE[ref_audio] = prompt
+
+            # Sauvegarde de la transcription automatique si le fichier .txt n'existait pas
+            if not ref_text and hasattr(prompt, "ref_text") and prompt.ref_text:
+                try:
+                    auto_txt = os.path.splitext(ref_audio)[0] + ".txt"
+                    with open(auto_txt, "w", encoding="utf-8") as f:
+                        f.write(prompt.ref_text.strip())
+                    self.logger.info(f"OmniVoice : Transcription de référence auto-générée dans '{auto_txt}'")
+                except Exception as e_write:
+                    self.logger.debug(f"Impossible de sauvegarder le fichier texte ({e_write})")
+
+        # Configuration optimisée pour fidélité maximale de clonage
+        # guidance_scale: plus élevé (2.6) = adhésion acoustique stricte à la voix de référence
+        guidance_scale = float(kwargs.get("guidance_scale", os.getenv("OMNIVOICE_GUIDANCE_SCALE", 2.6)))
+        
+        # position_temperature: 1.0 (au lieu de 5.0) supprime le bruit Gumbel aléatoire qui altère le timbre
+        position_temperature = float(kwargs.get("position_temperature", os.getenv("OMNIVOICE_POS_TEMP", 1.0)))
+        
+        # num_step: 32 étapes pour une synthèse propre et nette
+        num_step = int(kwargs.get("num_step", 32))
+
+        gen_config = OmniVoiceGenerationConfig(
+            num_step=num_step,
+            guidance_scale=guidance_scale,
+            position_temperature=position_temperature,
+            class_temperature=0.0,  # Échantillonnage déterministe
+            denoise=True,
+            preprocess_prompt=True,
+            postprocess_output=True,
+        )
+
+        speed = float(kwargs.get("speed", 1.0))
+
+        # Synthèse vocale avec conditionnement exact du profil vocal et de la langue
         wav = model.generate(
-            text=text,
-            ref_audio=ref_audio,
-            ref_text=ref_text,
-            speed=1.0
+            text=text.strip(),
+            language=lang_id,
+            voice_clone_prompt=prompt,
+            generation_config=gen_config,
+            speed=speed
         )
         
-        # Enregistrement natif à 24 000 Hz comme défini par pyVideoTrans
-        sf.write(output_file, wav[0], 24000)
+        wav_out = wav[0]
+        sample_rate = getattr(model, "sampling_rate", 24000) or 24000
+
+        # Normalisation anti-clipping
+        max_val = np.abs(wav_out).max()
+        if max_val > 1.0:
+            wav_out = wav_out / max_val * 0.98
+
+        os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
+        try:
+            sf.write(output_file, wav_out, sample_rate)
+        except Exception:
+            wav_fallback = output_file.rsplit('.', 1)[0] + ".wav"
+            sf.write(wav_fallback, wav_out, sample_rate)
+            if output_file != wav_fallback:
+                import subprocess
+                subprocess.run(
+                    ["ffmpeg", "-y", "-i", wav_fallback, output_file],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )

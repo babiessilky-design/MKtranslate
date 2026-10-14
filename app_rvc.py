@@ -486,11 +486,10 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
                     chatter_provider.generate(text=text, voice=voice, target_lang=TRANSLATE_AUDIO_TO, output_file=output_file)
                     generated_successfully = True
                 elif cloning_engine == "OmniVoice":
-                    from soni_translate.tts_providers import get_provider
-                    provider = get_provider(voice)
-                    if provider:
-                        provider.generate(text, voice, TRANSLATE_AUDIO_TO, output_file)
-                        generated_successfully = True
+                    from soni_translate.tts_providers.omnivoice import OmniVoiceProvider
+                    omni_provider = OmniVoiceProvider()
+                    omni_provider.generate(text=text, voice=voice, target_lang=TRANSLATE_AUDIO_TO, output_file=output_file)
+                    generated_successfully = True
             except Exception as e:
                 logger.error(f"Custom Cloning Error ({voice_name}) with {cloning_engine}: {str(e)}")
 
