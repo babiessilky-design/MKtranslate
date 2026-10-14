@@ -7,6 +7,9 @@ import whisperx
 import torch
 import gc
 import os
+import json
+import re
+import time
 import soundfile as sf
 from IPython.utils import capture # noqa
 from .language_configuration import EXTRA_ALIGN, INVERTED_LANGUAGES
@@ -15,14 +18,13 @@ from .postprocessor import sanitize_file_name
 from .utils import remove_directory_contents, run_command
 
 ASR_MODEL_OPTIONS = [
-    "tiny",
-    "base",
-    "small",
-    "medium",
-    "large",
-    "large-v1",
-    "large-v2",
+    "Gemini 3.5 Transcribe",
     "large-v3",
+    "large-v2",
+    "medium",
+    "small",
+    "base",
+    "tiny",
     "distil-large-v2",
     "Systran/faster-distil-whisper-large-v3",
     "tiny.en",
@@ -129,6 +131,158 @@ def openai_api_whisper(
     return audio, result
 
 
+def gemini_api_transcribe(
+    input_audio_file,
+    source_lang=None,
+    model_name="gemini-3.5-transcribe"
+):
+    """
+    Transcrit l'audio et effectue la diarisation nativement avec Google Gemini.
+    Renvoie audio, result {"segments": [...], "language": ...}
+    Chaque segment contient: start, end, text, speaker
+    """
+    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("google_api_key")
+    if not api_key:
+        raise ValueError("Erreur : La variable d'environnement GOOGLE_API_KEY est manquante pour utiliser Gemini Transcribe.")
+
+    logger.info(f"Gemini Transcribe : Traitement du fichier '{input_audio_file}'...")
+
+    try:
+        audio = whisperx.load_audio(input_audio_file)
+    except Exception:
+        audio = None
+
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=api_key)
+
+    # Upload du fichier audio via Files API de Gemini
+    uploaded_file = client.files.upload(file=input_audio_file)
+    try:
+        candidate_models = [
+            model_name,
+            os.environ.get("GEMINI_TRANSCRIBE_MODEL", "gemini-3.5-transcribe"),
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash"
+        ]
+        unique_models = []
+        for m in candidate_models:
+            if m and m not in unique_models:
+                unique_models.append(m)
+
+        lang_instruction = f"The source language is {source_lang}." if source_lang and source_lang != "Automatic detection" else "Auto-detect the spoken language."
+
+        prompt = f"""You are an expert speech recognition and speaker diarization engine.
+Transcribe the provided audio accurately.
+{lang_instruction}
+
+CRITICAL RULES:
+1. Identify all distinct speakers and label them strictly as SPEAKER_00, SPEAKER_01, SPEAKER_02, etc. (0-indexed).
+2. Segment speech into natural, coherent sentences or dialogue phrases (ideal for subtitles and video dubbing).
+3. For each segment, output:
+   - "start": start time in seconds (float, e.g. 1.25)
+   - "end": end time in seconds (float, e.g. 3.40)
+   - "text": the transcribed text in the original spoken language.
+   - "speaker": speaker ID (e.g. "SPEAKER_00", "SPEAKER_01").
+4. Do NOT translate. Keep the original spoken words.
+5. Filter out filler sounds (like "um", "uh", "euh", stuttering).
+6. Return ONLY valid JSON in this exact structure:
+{{
+  "language": "en",
+  "segments": [
+    {{
+      "start": 0.0,
+      "end": 2.5,
+      "text": "First sentence here.",
+      "speaker": "SPEAKER_00"
+    }}
+  ]
+}}"""
+
+        response = None
+        last_error = None
+        for mod in unique_models:
+            try:
+                logger.info(f"Gemini Transcribe : Tentative avec le modèle '{mod}'...")
+                config = types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.1,
+                )
+                response = client.models.generate_content(
+                    model=mod,
+                    contents=[uploaded_file, prompt],
+                    config=config
+                )
+                if response and response.text:
+                    logger.info(f"Gemini Transcribe : Succès avec le modèle '{mod}' !")
+                    break
+            except Exception as e:
+                if "transcribe" in mod and hasattr(client, "interactions"):
+                    try:
+                        inter_resp = client.interactions.create(
+                            model=mod,
+                            input=[{"type": "audio", "uri": uploaded_file.uri}],
+                        )
+                        if inter_resp and hasattr(inter_resp, "text"):
+                            response = inter_resp
+                            logger.info(f"Gemini Transcribe (interactions) : Succès avec '{mod}' !")
+                            break
+                    except Exception as err_inter:
+                        logger.warning(f"Échec interactions ({err_inter})")
+
+                logger.warning(f"Modèle '{mod}' indisponible ({e}). Bascule sur le modèle suivant...")
+                last_error = e
+
+        if not response or not response.text:
+            raise RuntimeError(f"Échec de la transcription Gemini sur tous les modèles: {last_error}")
+
+        # Nettoyage et parsing JSON
+        text_resp = response.text.strip()
+        if text_resp.startswith("```json"):
+            text_resp = text_resp[7:]
+        if text_resp.endswith("```"):
+            text_resp = text_resp[:-3]
+        text_resp = text_resp.strip()
+
+        data = json.loads(text_resp)
+        segments = data.get("segments", [])
+        detected_lang = data.get("language", source_lang or "en")
+
+        formatted_segments = []
+        for seg in segments:
+            if "start" in seg and "end" in seg and "text" in seg:
+                start_val = float(seg["start"])
+                end_val = float(seg["end"])
+                if end_val <= start_val:
+                    end_val = start_val + 0.5
+                spk = seg.get("speaker", "SPEAKER_00")
+                if not str(spk).startswith("SPEAKER_"):
+                    spk_num = re.findall(r'\d+', str(spk))
+                    spk = f"SPEAKER_{int(spk_num[0]):02d}" if spk_num else "SPEAKER_00"
+
+                formatted_segments.append({
+                    "start": round(start_val, 2),
+                    "end": round(end_val, 2),
+                    "text": str(seg["text"]).strip(),
+                    "speaker": spk
+                })
+
+        logger.info(f"Gemini Transcribe : {len(formatted_segments)} segments transcrits et diarizés avec succès.")
+        result = {
+            "segments": formatted_segments,
+            "language": detected_lang
+        }
+        return audio, result
+
+    finally:
+        try:
+            client.files.delete(name=uploaded_file.name)
+        except Exception:
+            pass
+
+
 def find_whisper_models():
     path = WHISPER_MODELS_PATH
     folders = []
@@ -168,6 +322,9 @@ def transcribe_speech(
         - audio: Loaded audio file.
         - result: Transcription result as a dictionary.
     """
+
+    if asr_model == "Gemini 3.5 Transcribe":
+        return gemini_api_transcribe(audio_wav, SOURCE_LANGUAGE)
 
     if asr_model == "OpenAI_API_Whisper":
         if literalize_numbers:

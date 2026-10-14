@@ -221,6 +221,7 @@ from soni_translate.speech_segmentation import (
     align_speech,
     diarize_speech,
     diarization_models,
+    reencode_speakers,
 )
 from soni_translate.text_multiformat_processor import (
     BORDER_COLORS,
@@ -937,7 +938,7 @@ class SoniTranslate(SoniTrCache):
         
         if not YOUR_HF_TOKEN:
             YOUR_HF_TOKEN = os.getenv("YOUR_HF_TOKEN")
-            if diarization_model == "disable" or max_speakers == 1:
+            if diarization_model == "disable" or max_speakers == 1 or transcriber_model == "Gemini 3.5 Transcribe":
                 if YOUR_HF_TOKEN is None:
                     YOUR_HF_TOKEN = ""
             elif not YOUR_HF_TOKEN:
@@ -953,7 +954,7 @@ class SoniTranslate(SoniTrCache):
             check_openai_api_key()
             
         # --- AJOUT POUR GEMINI ET GROQ ---
-        if "gemini" in translate_process.lower() and not os.environ.get("GOOGLE_API_KEY"):
+        if ("gemini" in translate_process.lower() or transcriber_model == "Gemini 3.5 Transcribe") and not os.environ.get("GOOGLE_API_KEY"):
             raise ValueError("Erreur : La clé API Google (Gemini) est manquante. Assurez-vous de définir la variable d'environnement GOOGLE_API_KEY.")
             
         if "groq" in translate_process.lower() and not os.environ.get("GROQ_API_KEY"):
@@ -1227,7 +1228,9 @@ class SoniTranslate(SoniTrCache):
                 )
 
                 self.align_language = self.result["language"]
-                if (
+                if transcriber_model == "Gemini 3.5 Transcribe":
+                    logger.info("Alignement phonétique ignoré : Gemini fournit déjà des horodatages précis.")
+                elif (
                     not subtitle_file
                     or text_segmentation_scale in ["word", "character"]
                 ):
@@ -1276,25 +1279,30 @@ class SoniTranslate(SoniTrCache):
                     except Exception as error:
                         logger.error(str(error))
 
-            if not self.task_in_cache("diarize", [
-                min_speakers,
-                max_speakers,
-                YOUR_HF_TOKEN[:len(YOUR_HF_TOKEN)//2],
-                diarization_model
-            ], {
-                "result": self.result
-            }):
-                prog_disp("Diarizing...", 0.60, is_gui, progress=progress)
-                diarize_model_select = diarization_models[diarization_model]
-                self.result_diarize = diarize_speech(
-                    base_audio_wav if not self.vocals else self.vocals,
-                    self.result,
+            if transcriber_model == "Gemini 3.5 Transcribe":
+                prog_disp("Diarization complete (Gemini Native)", 0.60, is_gui, progress=progress)
+                self.result_diarize = reencode_speakers(copy.deepcopy(self.result))
+                logger.info("Diarisation Pyannote court-circuitée : locuteurs déjà assignés nativement par Gemini.")
+            else:
+                if not self.task_in_cache("diarize", [
                     min_speakers,
                     max_speakers,
-                    YOUR_HF_TOKEN,
-                    diarize_model_select,
-                )
-                logger.debug("Diarize complete")
+                    YOUR_HF_TOKEN[:len(YOUR_HF_TOKEN)//2],
+                    diarization_model
+                ], {
+                    "result": self.result
+                }):
+                    prog_disp("Diarizing...", 0.60, is_gui, progress=progress)
+                    diarize_model_select = diarization_models[diarization_model]
+                    self.result_diarize = diarize_speech(
+                        base_audio_wav if not self.vocals else self.vocals,
+                        self.result,
+                        min_speakers,
+                        max_speakers,
+                        YOUR_HF_TOKEN,
+                        diarize_model_select,
+                    )
+                    logger.debug("Diarize complete")
             self.result_source_lang = copy.deepcopy(self.result_diarize)
 
             if not self.task_in_cache("translate", [
@@ -2480,8 +2488,8 @@ def create_gui(theme, logs_in_gui=False):
                             WHISPER_MODEL_SIZE = gr.Dropdown(
                                 ASR_MODEL_OPTIONS + find_whisper_models(),
                                 value=whisper_model_default,
-                                label="Whisper ASR model",
-                                info=lg_conf["asr_model_info"],
+                                label="Transcription & ASR Model",
+                                info="Sélectionnez 'Gemini 3.5 Transcribe' (Cloud Google avec diarisation native intégrée) ou un modèle Whisper local.",
                                 allow_custom_value=True,
                             )
                             com_t_opt, com_t_default = (
