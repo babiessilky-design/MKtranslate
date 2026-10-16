@@ -159,12 +159,19 @@ class OmniVoiceProvider(BaseTTSProvider):
                 except Exception as e_write:
                     self.logger.debug(f"Impossible de sauvegarder le fichier texte ({e_write})")
 
+        # Fixation du Seed pour reproductibilité absolue et stabilité parfaite du timbre (anti-dérive)
+        seed = int(kwargs.get("seed", os.getenv("OMNIVOICE_SEED", 42)))
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        np.random.seed(seed)
+
         # Configuration optimisée pour fidélité maximale de clonage
         # guidance_scale: plus élevé (2.6) = adhésion acoustique stricte à la voix de référence
         guidance_scale = float(kwargs.get("guidance_scale", os.getenv("OMNIVOICE_GUIDANCE_SCALE", 2.6)))
         
-        # position_temperature: 1.0 (au lieu de 5.0) supprime le bruit Gumbel aléatoire qui altère le timbre
-        position_temperature = float(kwargs.get("position_temperature", os.getenv("OMNIVOICE_POS_TEMP", 1.0)))
+        # position_temperature: 0.0 supprime tout bruit Gumbel aléatoire qui altère le timbre masculin
+        position_temperature = float(kwargs.get("position_temperature", os.getenv("OMNIVOICE_POS_TEMP", 0.0)))
         
         # num_step: 32 étapes pour une synthèse propre et nette
         num_step = int(kwargs.get("num_step", 32))

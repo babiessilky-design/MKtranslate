@@ -475,6 +475,12 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
                 else:
                     cloning_engine = os.getenv("CUSTOM_CLONING_ENGINE", "F5-TTS")
                 
+                # Déterminisme et stabilité du timbre (Seed fixe anti-dérive)
+                torch.manual_seed(42)
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed_all(42)
+                np.random.seed(42)
+
                 if cloning_engine == "F5-TTS":
                     from f5_tts.api import F5TTS
                     f5_engine = F5TTS()
@@ -488,7 +494,7 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
                 elif cloning_engine == "OmniVoice":
                     from soni_translate.tts_providers.omnivoice import OmniVoiceProvider
                     omni_provider = OmniVoiceProvider()
-                    omni_provider.generate(text=text, voice=voice, target_lang=TRANSLATE_AUDIO_TO, output_file=output_file)
+                    omni_provider.generate(text=text, voice=voice, target_lang=TRANSLATE_AUDIO_TO, output_file=output_file, seed=42)
                     generated_successfully = True
             except Exception as e:
                 logger.error(f"Custom Cloning Error ({voice_name}) with {cloning_engine}: {str(e)}")
@@ -1466,21 +1472,22 @@ class SoniTranslate(SoniTrCache):
             "sub_file": self.sub_file
         }):
             # ==============================================================
-            # DÉBUT : INTERCEPTEUR POUR LA DÉTECTION DE GENRE AUTOMATIQUE
+            # INTERCEPTEUR : DÉTECTION DE GENRE AUTOMATIQUE
             # ==============================================================
             if auto_detect_gender:
                 try:
                     prog_disp("Analyzing speaker genders automatically...", 0.75, is_gui, progress=progress)
                     from soni_translate.gender_detection import VoiceGenderDetector, auto_assign_voices
                     
-                    # Détermine quel fichier audio utiliser pour l'analyse
+                    os.environ["GEMINI_TTS_MODEL"] = gemini_tts_model
+                    
                     audio_for_detection = self.vocals if hasattr(self, 'vocals') and self.vocals else base_audio_wav
                     
                     if os.path.exists(audio_for_detection):
                         detector = VoiceGenderDetector()
                         speaker_genders = detector.detect_speaker_genders(audio_for_detection, self.result_diarize)
                         
-                        # Calcule le dictionnaire d'attribution des voix EdgeTTS
+                        # Calcule l'attribution des voix en respectant les voix configurées par l'utilisateur
                         assigned_voices = auto_assign_voices(
                             speaker_genders, 
                             target_language=TRANSLATE_AUDIO_TO,
@@ -1488,7 +1495,6 @@ class SoniTranslate(SoniTrCache):
                             default_female=default_female_voice
                         )
                         
-                        # On remplace à la volée les choix de voix manuels par les voix détectées par l'IA
                         tts_voice00 = assigned_voices.get("SPEAKER_00", tts_voice00)
                         tts_voice01 = assigned_voices.get("SPEAKER_01", tts_voice01)
                         tts_voice02 = assigned_voices.get("SPEAKER_02", tts_voice02)
@@ -1505,84 +1511,6 @@ class SoniTranslate(SoniTrCache):
                         logger.info(f"Voices overridden automatically by Gender Detection: SPEAKER_00={tts_voice00}, SPEAKER_01={tts_voice01}")
                     else:
                         logger.warning("Vocal or base audio file not found on disk. Falling back to manual choices.")
-                except Exception as e:
-                    logger.error(f"Error in voice gender detector: {str(e)}")
-            # ==============================================================
-            # DÉBUT : INTERCEPTEUR POUR LA DÉTECTION DE GENRE AUTOMATIQUE
-            # ==============================================================
-            if auto_detect_gender:
-                try:
-                    prog_disp("Analyzing speaker genders automatically...", 0.75, is_gui, progress=progress)
-                    from soni_translate.gender_detection import VoiceGenderDetector, auto_assign_voices
-                    
-                    audio_for_detection = self.vocals if hasattr(self, 'vocals') and self.vocals else base_audio_wav
-                    
-                    if os.path.exists(audio_for_detection):
-                        detector = VoiceGenderDetector()
-                        speaker_genders = detector.detect_speaker_genders(audio_for_detection, self.result_diarize)
-                        
-                        assigned_voices = auto_assign_voices(speaker_genders, target_language=TRANSLATE_AUDIO_TO)
-                        
-                        tts_voice00 = assigned_voices.get("SPEAKER_00", tts_voice00)
-                        tts_voice01 = assigned_voices.get("SPEAKER_01", tts_voice01)
-                        tts_voice02 = assigned_voices.get("SPEAKER_02", tts_voice02)
-                        tts_voice03 = assigned_voices.get("SPEAKER_03", tts_voice03)
-                        tts_voice04 = assigned_voices.get("SPEAKER_04", tts_voice04)
-                        tts_voice05 = assigned_voices.get("SPEAKER_05", tts_voice05)
-                        tts_voice06 = assigned_voices.get("SPEAKER_06", tts_voice06)
-                        tts_voice07 = assigned_voices.get("SPEAKER_07", tts_voice07)
-                        tts_voice08 = assigned_voices.get("SPEAKER_08", tts_voice08)
-                        tts_voice09 = assigned_voices.get("SPEAKER_09", tts_voice09)
-                        tts_voice10 = assigned_voices.get("SPEAKER_10", tts_voice10)
-                        tts_voice11 = assigned_voices.get("SPEAKER_11", tts_voice11)
-                        
-                        logger.info(f"Voices overridden automatically: SPEAKER_00={tts_voice00}, SPEAKER_01={tts_voice01}")
-                    else:
-                        logger.warning("Audio file not found for gender detection.")
-                except Exception as e:
-                    logger.error(f"Error in voice gender detector: {str(e)}")
-            # ==============================================================
-            # ==============================================================
-            # DÉBUT : INTERCEPTEUR POUR LA DÉTECTION DE GENRE AUTOMATIQUE
-            # ==============================================================
-            if auto_detect_gender:
-                try:
-                    prog_disp("Analyzing speaker genders automatically...", 0.75, is_gui, progress=progress)
-                    from soni_translate.gender_detection import VoiceGenderDetector, auto_assign_voices
-                    
-                    # On stocke le modèle Gemini sélectionné dans l'environnement pour que le patch de génération puisse le lire
-                    os.environ["GEMINI_TTS_MODEL"] = gemini_tts_model
-                    
-                    audio_for_detection = self.vocals if hasattr(self, 'vocals') and self.vocals else base_audio_wav
-                    
-                    if os.path.exists(audio_for_detection):
-                        detector = VoiceGenderDetector()
-                        speaker_genders = detector.detect_speaker_genders(audio_for_detection, self.result_diarize)
-                        
-                        # On appelle avec les voix par défaut choisies par l'utilisateur
-                        assigned_voices = auto_assign_voices(
-                            speaker_genders, 
-                            target_language=TRANSLATE_AUDIO_TO,
-                            default_male=default_male_voice,
-                            default_female=default_female_voice
-                        )
-                        
-                        tts_voice00 = assigned_voices.get("SPEAKER_00", tts_voice00)
-                        tts_voice01 = assigned_voices.get("SPEAKER_01", tts_voice01)
-                        tts_voice02 = assigned_voices.get("SPEAKER_02", tts_voice02)
-                        tts_voice03 = assigned_voices.get("SPEAKER_03", tts_voice03)
-                        tts_voice04 = assigned_voices.get("SPEAKER_04", tts_voice04)
-                        tts_voice05 = assigned_voices.get("SPEAKER_05", tts_voice05)
-                        tts_voice06 = assigned_voices.get("SPEAKER_06", tts_voice06)
-                        tts_voice07 = assigned_voices.get("SPEAKER_07", tts_voice07)
-                        tts_voice08 = assigned_voices.get("SPEAKER_08", tts_voice08)
-                        tts_voice09 = assigned_voices.get("SPEAKER_09", tts_voice09)
-                        tts_voice10 = assigned_voices.get("SPEAKER_10", tts_voice10)
-                        tts_voice11 = assigned_voices.get("SPEAKER_11", tts_voice11)
-                        
-                        logger.info(f"Voices overridden automatically: SPEAKER_00={tts_voice00}, SPEAKER_01={tts_voice01}")
-                    else:
-                        logger.warning("Audio file not found for gender detection.")
                 except Exception as e:
                     logger.error(f"Error in voice gender detector: {str(e)}")
             # ==============================================================
