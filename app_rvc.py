@@ -293,17 +293,21 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
     tts_voices = list(args[:12])
     logger = logging.getLogger("soni_translate")
     
+    def is_custom_ai_voice(v):
+        if not isinstance(v, str):
+            return False
+        v_low = v.lower()
+        return (
+            v_low.startswith("kokoro/") or 
+            v_low.startswith("gemini/") or 
+            v_low.startswith("elevenlabs/") or 
+            v_low.startswith("custom/") or
+            v_low.startswith("chatterbox/") or
+            v_low.startswith("omnivoice/")
+        )
+
     # On regarde si au moins une voix "externe/custom" est demandée
-    has_custom_tts = any(
-        isinstance(v, str) and (
-            v.startswith("Kokoro/") or 
-            v.startswith("Gemini/") or 
-            v.startswith("ElevenLabs/") or 
-            v.startswith("Custom/") or
-            v.startswith("ChatterBox/") or
-            v.startswith("Chatterbox/")
-        ) for v in tts_voices
-    )
+    has_custom_tts = any(is_custom_ai_voice(v) for v in tts_voices)
     
     if not has_custom_tts:
         # Fallback classique immédiat si aucune voix IA n'est demandée
@@ -338,15 +342,7 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
         voice = tts_voices[speaker_idx]
         
         # On ignore les voix qui ne sont pas des voix d'IA personnalisées (elles ont déjà été générées à l'Étape 1)
-        is_custom_voice = isinstance(voice, str) and (
-            voice.startswith("Kokoro/") or 
-            voice.startswith("Gemini/") or 
-            voice.startswith("ElevenLabs/") or 
-            voice.startswith("Custom/") or
-            voice.startswith("ChatterBox/") or
-            voice.startswith("Chatterbox/")
-        )
-        if not is_custom_voice:
+        if not is_custom_ai_voice(voice):
             continue
             
         text = segment["text"].strip()
