@@ -1,4 +1,4 @@
-# flake8: noqa
+﻿# flake8: noqa
 
 news = """ ## 📖 News
 
@@ -26,9 +26,9 @@ news = """ ## 📖 News
 language_data = {
     "english": {
         "description": """
-        ### 🎥 **Translate videos easily with SoniTranslate!** 📽️
+        ### 🎥 **Translate videos easily with MKtranslate!** 📽️
 
-        Upload a video, subtitle, audio file or provide a URL video link. 📽️ **Gets the updated notebook from the official repository.: [SoniTranslate](https://github.com/R3gm/SoniTranslate)!**
+        Upload a video, subtitle, audio file or provide a URL video link. 📽️ **Gets the updated notebook from the official repository.: [MKtranslate](https://github.com/babiessilky-design/MKtranslate)!**
 
         See the tab `Help` for instructions on how to use it. Let's start having fun with video translation! 🚀🎉
         """,
@@ -45,7 +45,7 @@ language_data = {
 
         ---
 
-        # 🧩 **SoniTranslate supports different TTS (Text-to-Speech) engines, which are:**
+        # 🧩 **MKtranslate supports different TTS (Text-to-Speech) engines, which are:**
         - EDGE-TTS → format `en-AU-WilliamNeural-Male` → Fast and accurate.
         - FACEBOOK MMS → format `en-facebook-mms VITS` → The voice is more natural; at the moment, it only uses CPU.
         - PIPER TTS → format `en_US-lessac-high VITS-onnx` → Same as the previous one, but it is optimized for both CPU and GPU.
@@ -216,9 +216,9 @@ language_data = {
     },
     "spanish": {
         "description": """
-        ### 🎥 **¡Traduce videos fácilmente con SoniTranslate!** 📽️
+        ### 🎥 **¡Traduce videos fácilmente con MKtranslate!** 📽️
 
-        Sube un video, audio o proporciona un enlace de YouTube. 📽️ **Obtén el cuaderno actualizado desde el repositorio oficial: [SoniTranslate](https://github.com/R3gm/SoniTranslate)!**
+        Sube un video, audio o proporciona un enlace de YouTube. 📽️ **Obtén el cuaderno actualizado desde el repositorio oficial: [MKtranslate](https://github.com/babiessilky-design/MKtranslate)!**
 
         Consulta la pestaña `Ayuda` para obtener instrucciones sobre cómo usarlo. ¡Comencemos a divertirnos con la traducción de videos! 🚀🎉
         """,
@@ -235,7 +235,7 @@ language_data = {
 
         ---
 
-        # 🧩 **SoniTranslate admite diferentes motores de TTS (Texto a Voz), los cuales son:**
+        # 🧩 **MKtranslate admite diferentes motores de TTS (Texto a Voz), los cuales son:**
         - EDGE-TTS → formato `en-AU-WilliamNeural-Male` → Rapidos y precisos.
         - FACEBOOK MMS → formato `en-facebook-mms VITS` → Voz más natural, por el momento solo usa CPU.
         - PIPER TTS → formato `en_US-lessac-high VITS-onnx` → Igual que el anterior, pero está optimizado tanto para CPU como para GPU.
@@ -406,9 +406,9 @@ language_data = {
     },
     "french": {
         "description": """
-        ### 🎥 **Traduisez facilement les vidéos avec SoniTranslate !** 📽️
+        ### 🎥 **Traduisez facilement les vidéos avec MKtranslate !** 📽️
 
-        Téléchargez une vidéo, un fichier audio ou fournissez un lien YouTube. 📽️ **Obtenez le notebook mis à jour à partir du référentiel officiel : [SoniTranslate](https://github.com/R3gm/SoniTranslate)!**
+        Téléchargez une vidéo, un fichier audio ou fournissez un lien YouTube. 📽️ **Obtenez le notebook mis à jour à partir du référentiel officiel : [MKtranslate](https://github.com/babiessilky-design/MKtranslate)!**
 
         Consultez l'onglet `Aide` pour des instructions sur son utilisation. Amusons-nous à traduire des vidéos ! 🚀🎉
         """,
@@ -425,7 +425,7 @@ language_data = {
 
         ---
 
-        # 🧩 **SoniTranslate prend en charge différents moteurs TTS (Text-to-Speech), à savoir :**
+        # 🧩 **MKtranslate prend en charge différents moteurs TTS (Text-to-Speech), à savoir :**
         - EDGE-TTS → format `en-AU-WilliamNeural-Male` → Rapide et précis.
         - FACEBOOK MMS → format `en-facebook-mms VITS` → La voix est plus naturelle ; pour le moment, il utilise uniquement le CPU.
         - PIPER TTS → format `en_US-lessac-high VITS-onnx` → Identique au précédent, mais optimisé pour le CPU et le GPU.
@@ -596,9 +596,9 @@ language_data = {
     },
     "german": {
         "description": """
-        ### 🎥 **Übersetzen Sie Videos einfach mit SoniTranslate!** 📽️
+        ### 🎥 **Übersetzen Sie Videos einfach mit MKtranslate!** 📽️
 
-        Laden Sie ein Video, eine Audiodatei hoch oder geben Sie einen YouTube-Link an. 📽️ **Holen Sie sich das aktualisierte Notizbuch aus dem offiziellen Repository: [SoniTranslate](https://github.com/R3gm/SoniTranslate)!**
+        Laden Sie ein Video, eine Audiodatei hoch oder geben Sie einen YouTube-Link an. 📽️ **Holen Sie sich das aktualisierte Notizbuch aus dem offiziellen Repository: [MKtranslate](https://github.com/babiessilky-design/MKtranslate)!**
 
         Sehen Sie sich den Tab `Hilfe` für Anweisungen zur Verwendung an. Fangen wir an, Spaß beim Übersetzen von Videos zu haben! 🚀🎉
         """,
@@ -615,7 +615,7 @@ language_data = {
 
         ---
 
-        # 🧩 **SoniTranslate unterstützt verschiedene TTS (Text-to-Speech)-Engines, darunter:**
+        # 🧩 **MKtranslate unterstützt verschiedene TTS (Text-to-Speech)-Engines, darunter:**
         - EDGE-TTS → Format `en-AU-WilliamNeural-Male` → Schnell und präzise.
         - FACEBOOK MMS → Format `en-facebook-mms VITS` → Die Stimme ist natürlicher; derzeit nur CPU.
         - PIPER TTS → Format `en_US-lessac-high VITS-onnx` → Wie das vorherige, aber optimiert für CPU und GPU.
@@ -786,9 +786,9 @@ language_data = {
     },
     "italian": {
         "description": """
-        ### 🎥 **Traduci i video facilmente con SoniTranslate!** 📽️
+        ### 🎥 **Traduci i video facilmente con MKtranslate!** 📽️
 
-        Carica un video, un file audio o fornisci un link YouTube. 📽️ **Ottieni il notebook aggiornato dal repository ufficiale: [SoniTranslate](https://github.com/R3gm/SoniTranslate)!**
+        Carica un video, un file audio o fornisci un link YouTube. 📽️ **Ottieni il notebook aggiornato dal repository ufficiale: [MKtranslate](https://github.com/babiessilky-design/MKtranslate)!**
 
         Consulta la scheda `Aiuto` per istruzioni su come utilizzarlo. Iniziamo a divertirci con la traduzione dei video! 🚀🎉
         """,
@@ -805,7 +805,7 @@ language_data = {
 
         ---
 
-        # 🧩 **SoniTranslate supporta diversi motori TTS (Text-to-Speech), tra cui:**
+        # 🧩 **MKtranslate supporta diversi motori TTS (Text-to-Speech), tra cui:**
         - EDGE-TTS → formato `en-AU-WilliamNeural-Male` → Veloce e preciso.
         - FACEBOOK MMS → formato `en-facebook-mms VITS` → La voce è più naturale; al momento utilizza solo la CPU.
         - PIPER TTS → formato `en_US-lessac-high VITS-onnx` → Come il precedente, ma ottimizzato sia per CPU che GPU.
@@ -976,9 +976,9 @@ language_data = {
     },
     "japanese": {
         "description": """
-        ### 🎥 **SoniTranslateで簡単に動画を翻訳しましょう！** 📽️
+        ### 🎥 **MKtranslateで簡単に動画を翻訳しましょう！** 📽️
 
-        動画、音声ファイルをアップロードするか、YouTubeのリンクを提供してください。📽️ **公式リポジトリから最新のノートブックを入手する: [SoniTranslate](https://github.com/R3gm/SoniTranslate)!**
+        動画、音声ファイルをアップロードするか、YouTubeのリンクを提供してください。📽️ **公式リポジトリから最新のノートブックを入手する: [MKtranslate](https://github.com/babiessilky-design/MKtranslate)!**
 
         使用方法についての指示は`ヘルプ`タブを参照してください。動画翻訳を楽しんでみましょう！ 🚀🎉
         """,
@@ -995,7 +995,7 @@ language_data = {
 
         ---
 
-        # 🧩 **SoniTranslateはさまざまなTTS（テキスト読み上げ）エンジンをサポートしています。これらは次のとおりです:**
+        # 🧩 **MKtranslateはさまざまなTTS（テキスト読み上げ）エンジンをサポートしています。これらは次のとおりです:**
         - EDGE-TTS → 形式 `en-AU-WilliamNeural-Male` → 速く正確です。
         - FACEBOOK MMS → 形式 `en-facebook-mms VITS` → 音声がより自然です。現時点ではCPUのみを使用します。
         - PIPER TTS → 形式 `en_US-lessac-high VITS-onnx` → 前述のものと同じですが、CPUとGPUの両方に最適化されています。
@@ -1166,9 +1166,9 @@ language_data = {
     },
     "chinese_zh_cn": {
         "description": """
-          ### 🎥 **使用SoniTranslate轻松翻译视频！** 📽️
+          ### 🎥 **使用MKtranslate轻松翻译视频！** 📽️
 
-          上传视频、音频文件或提供YouTube链接。 📽️ **从官方存储库获取更新的笔记本：[SoniTranslate](https://github.com/R3gm/SoniTranslate)!**
+          上传视频、音频文件或提供YouTube链接。 📽️ **从官方存储库获取更新的笔记本：[MKtranslate](https://github.com/babiessilky-design/MKtranslate)!**
 
           查看`帮助`标签以获取如何使用的说明。让我们开始享受视频翻译的乐趣吧！ 🚀🎉
           """,
@@ -1185,7 +1185,7 @@ language_data = {
 
           ---
 
-          # 🧩 **SoniTranslate支持不同的TTS（文本到语音）引擎，包括:**
+          # 🧩 **MKtranslate支持不同的TTS（文本到语音）引擎，包括:**
           - EDGE-TTS → 格式 `en-AU-WilliamNeural-Male` → 快速而准确。
           - FACEBOOK MMS → 格式 `en-facebook-mms VITS` → 声音更自然；目前仅使用CPU。
           - PIPER TTS → 格式 `en_US-lessac-high VITS-onnx` → 与前一款相同，但针对CPU和GPU进行了优化。
@@ -1356,9 +1356,9 @@ language_data = {
     },
     "ukrainian": {
         "description": """
-        ### 🎥 **Перекладайте відео легко з SoniTranslate!** 📽️
+        ### 🎥 **Перекладайте відео легко з MKtranslate!** 📽️
 
-        Завантажте відео, аудіофайл або надайте посилання на YouTube. 📽️ **Отримайте оновлений ноутбук з офіційного репозиторію: [SoniTranslate](https://github.com/R3gm/SoniTranslate)!**
+        Завантажте відео, аудіофайл або надайте посилання на YouTube. 📽️ **Отримайте оновлений ноутбук з офіційного репозиторію: [MKtranslate](https://github.com/babiessilky-design/MKtranslate)!**
 
         Дивіться вкладку `Довідка` за інструкціями, як цим користуватися. Давайте почнемо веселощі з перекладу відео! 🚀🎉
         """,
@@ -1375,7 +1375,7 @@ language_data = {
 
         ---
 
-        # 🧩 **SoniTranslate підтримує різні двигуни TTS (текст-у-мову), які є:**
+        # 🧩 **MKtranslate підтримує різні двигуни TTS (текст-у-мову), які є:**
         - EDGE-TTS → формат `en-AU-WilliamNeural-Male` → Швидкий та точний.
         - FACEBOOK MMS → формат `en-facebook-mms VITS` → Голос більш натуральний; наразі використовується лише ЦП.
         - PIPER TTS → формат `en_US-lessac-high VITS-onnx` → Те ж саме, що й попередній, але оптимізований як для ЦП, так і для ГПУ.
@@ -1546,9 +1546,9 @@ language_data = {
     },
     "arabic": {
         "description": """
-          ### 🎥 **ترجمة مقاطع الفيديو بسهولة مع SoniTranslate!** 📽️
+          ### 🎥 **ترجمة مقاطع الفيديو بسهولة مع MKtranslate!** 📽️
 
-          قم بتحميل ملف فيديو أو صوتي أو قدم رابطًا لفيديو YouTube. 📽️ **احصل على الدفتر المحدث من المستودع الرسمي: [SoniTranslate](https://github.com/R3gm/SoniTranslate)!**
+          قم بتحميل ملف فيديو أو صوتي أو قدم رابطًا لفيديو YouTube. 📽️ **احصل على الدفتر المحدث من المستودع الرسمي: [MKtranslate](https://github.com/babiessilky-design/MKtranslate)!**
 
           انظر إلى علامة التبويب "المساعدة" للحصول على تعليمات حول كيفية استخدامه. لنبدأ بالمرح مع ترجمة الفيديو! 🚀🎉
           """,
@@ -1565,7 +1565,7 @@ language_data = {
 
           ---
 
-          # 🧩 **يدعم SoniTranslate محركات TTS (نص إلى كلام) مختلفة، وهي:**
+          # 🧩 **يدعم MKtranslate محركات TTS (نص إلى كلام) مختلفة، وهي:**
           - EDGE-TTS → الصيغة `en-AU-WilliamNeural-Male` → سريع ودقيق.
           - FACEBOOK MMS → الصيغة `en-facebook-mms VITS` → الصوت أكثر طبيعية؛ في الوقت الحالي، يستخدم فقط وحدة المعالجة المركزية.
           - PIPER TTS → الصيغة `en_US-lessac-high VITS-onnx` → نفس الشيء كما السابق، ولكنه محسّن لكل من وحدة المعالجة المركزية ووحدة معالجة الرسومات.
@@ -1736,9 +1736,9 @@ language_data = {
     },
     "russian": {
         "description": """
-        ### 🎥 **Перевод видео легко с SoniTranslate!** 📽️
+        ### 🎥 **Перевод видео легко с MKtranslate!** 📽️
 
-        Загрузите видео, аудиофайл или предоставьте ссылку на YouTube. 📽️ **Получите обновленный блокнот из официального репозитория.: [SoniTranslate](https://github.com/R3gm/SoniTranslate)!**
+        Загрузите видео, аудиофайл или предоставьте ссылку на YouTube. 📽️ **Получите обновленный блокнот из официального репозитория.: [MKtranslate](https://github.com/babiessilky-design/MKtranslate)!**
 
         Посмотрите вкладку `Помощь` для инструкций о том, как это использовать. Давайте начнем веселиться с переводом видео! 🚀🎉
         """,
@@ -1755,7 +1755,7 @@ language_data = {
 
         ---
 
-        # 🧩 **SoniTranslate поддерживает различные движки TTS (текст в речь), которые включают:**
+        # 🧩 **MKtranslate поддерживает различные движки TTS (текст в речь), которые включают:**
         - EDGE-TTS → формат `en-AU-WilliamNeural-Male` → Быстро и точно.
         - FACEBOOK MMS → формат `en-facebook-mms VITS` → Голос более естественный; на данный момент используется только процессор.
         - PIPER TTS → формат `en_US-lessac-high VITS-onnx` → То же самое, что и предыдущее, но оптимизировано как для CPU, так и для GPU.
@@ -1926,9 +1926,9 @@ language_data = {
     },
     "turkish": {
         "description": """
-        ### 🎥 **SoniTranslate ile videoları kolayca çevirin!** 📽️
+        ### 🎥 **MKtranslate ile videoları kolayca çevirin!** 📽️
 
-        Bir video yükleyin, ses dosyası ekleyin veya bir YouTube bağlantısı sağlayın. 📽️ **Güncellenmiş notebook'ı resmi depodan alın: [SoniTranslate](https://github.com/R3gm/SoniTranslate)!**
+        Bir video yükleyin, ses dosyası ekleyin veya bir YouTube bağlantısı sağlayın. 📽️ **Güncellenmiş notebook'ı resmi depodan alın: [MKtranslate](https://github.com/babiessilky-design/MKtranslate)!**
 
         Kullanım talimatları için 'Yardım' sekmesine bakın. Video çevirisi yapmaya başlayalım! 🚀🎉
         """,
@@ -1945,7 +1945,7 @@ language_data = {
 
         ---
 
-        # 🧩 **SoniTranslate, farklı TTS (Metin-okuma-sesi) motorlarını destekler, bunlar:**
+        # 🧩 **MKtranslate, farklı TTS (Metin-okuma-sesi) motorlarını destekler, bunlar:**
         - EDGE-TTS → biçim `tr-TR-ZeynepNeural-Kadın` → Hızlı ve doğru.
         - FACEBOOK MMS → biçim `tr-facebook-mms VITS` → Ses daha doğal; şu anda yalnızca CPU kullanıyor.
         - PIPER TTS → biçim `tr_TR-lessac-high VITS-onnx` → Öncekiyle aynı, ancak hem CPU hem de GPU için optimize edilmiştir.
@@ -2117,9 +2117,9 @@ language_data = {
     },
     "indonesian": {
         "description": """
-        ### 🎥 **Terjemahkan video dengan mudah menggunakan SoniTranslate!** 📽️
+        ### 🎥 **Terjemahkan video dengan mudah menggunakan MKtranslate!** 📽️
 
-        Unggah video, file audio, atau berikan tautan YouTube. 📽️ **Dapatkan buku catatan yang diperbarui dari repositori resmi: [SoniTranslate](https://github.com/R3gm/SoniTranslate)!**
+        Unggah video, file audio, atau berikan tautan YouTube. 📽️ **Dapatkan buku catatan yang diperbarui dari repositori resmi: [MKtranslate](https://github.com/babiessilky-design/MKtranslate)!**
 
         Lihat tab `Bantuan` untuk petunjuk penggunaan. Mari mulai bersenang-senang dengan menerjemahkan video! 🚀🎉
         """,
@@ -2136,7 +2136,7 @@ language_data = {
 
         ---
 
-        # 🧩 **SoniTranslate mendukung berbagai mesin TTS (Teks-ke-Suara), yaitu:**
+        # 🧩 **MKtranslate mendukung berbagai mesin TTS (Teks-ke-Suara), yaitu:**
         - EDGE-TTS → format `en-AU-WilliamNeural-Male` → Cepat dan akurat.
         - FACEBOOK MMS → format `en-facebook-mms VITS` → Suara lebih alami; saat ini, hanya menggunakan CPU.
         - PIPER TTS → format `en_US-lessac-high VITS-onnx` → Sama seperti sebelumnya, tetapi dioptimalkan untuk CPU dan GPU.
@@ -2307,9 +2307,9 @@ language_data = {
     },
     "portuguese": {
         "description": """
-        ### 🎥 **Traduza vídeos facilmente com o SoniTranslate!** 📽️
+        ### 🎥 **Traduza vídeos facilmente com o MKtranslate!** 📽️
 
-        Carregue um vídeo, arquivo de áudio ou forneça um link do YouTube. 📽️ **Obtenha o caderno atualizado do repositório oficial: [SoniTranslate](https://github.com/R3gm/SoniTranslate)!**
+        Carregue um vídeo, arquivo de áudio ou forneça um link do YouTube. 📽️ **Obtenha o caderno atualizado do repositório oficial: [MKtranslate](https://github.com/babiessilky-design/MKtranslate)!**
 
         Consulte a guia `Ajuda` para instruções sobre como usá-lo. Vamos começar a nos divertir com a tradução de vídeos! 🚀🎉
         """,
@@ -2326,7 +2326,7 @@ language_data = {
 
         ---
 
-        # 🧩 **SoniTranslate suporta diferentes motores TTS (Texto para Fala), que são:**
+        # 🧩 **MKtranslate suporta diferentes motores TTS (Texto para Fala), que são:**
         - EDGE-TTS → formato `en-AU-WilliamNeural-Male` → Rápido e preciso.
         - FACEBOOK MMS → formato `en-facebook-mms VITS` → A voz é mais natural; no momento, usa apenas CPU.
         - PIPER TTS → formato `en_US-lessac-high VITS-onnx` → O mesmo que o anterior, mas é otimizado para CPU e GPU.
@@ -2497,9 +2497,9 @@ language_data = {
     },
     "hindi": {
         "description": """
-          ### 🎥 **SoniTranslate के साथ वीडियो को आसानी से अनुवादित करें!** 📽️
+          ### 🎥 **MKtranslate के साथ वीडियो को आसानी से अनुवादित करें!** 📽️
 
-          एक वीडियो, ऑडियो फ़ाइल अपलोड करें या एक YouTube लिंक प्रदान करें। 📽️ **आधिकारिक भंडार से अपडेटेड नोटबुक प्राप्त करें: [SoniTranslate](https://github.com/R3gm/SoniTranslate)!**
+          एक वीडियो, ऑडियो फ़ाइल अपलोड करें या एक YouTube लिंक प्रदान करें। 📽️ **आधिकारिक भंडार से अपडेटेड नोटबुक प्राप्त करें: [MKtranslate](https://github.com/babiessilky-design/MKtranslate)!**
 
           उसे 'मदद' टैब देखें इसका उपयोग कैसे करना है के निर्देशों के लिए। वीडियो अनुवाद के साथ मज़े करना शुरू करें! 🚀🎉
           """,
@@ -2516,7 +2516,7 @@ language_data = {
 
           ---
 
-          # 🧩 **SoniTranslate विभिन्न TTS (टेक्स्ट-टू-स्पीच) इंजनों का समर्थन करता है, जो हैं:**
+          # 🧩 **MKtranslate विभिन्न TTS (टेक्स्ट-टू-स्पीच) इंजनों का समर्थन करता है, जो हैं:**
           - EDGE-TTS → प्रारूप `en-AU-WilliamNeural-Male` → तेज़ और सटीक।
           - FACEBOOK MMS → प्रारूप `en-facebook-mms VITS` → आवाज अधिक प्राकृतिक है; वर्तमान में, यह केवल CPU का उपयोग करता है।
           - PIPER TTS → प्रारूप `en_US-lessac-high VITS-onnx` → पिछले वाले के समान, लेकिन यह CPU और GPU दोनों के लिए अनुकूलित है।
@@ -2687,9 +2687,9 @@ language_data = {
     },
     "vietnamese": {
         "description": """
-        ### 🎥 **Dịch video dễ dàng với SoniTranslate!** 📽️
+        ### 🎥 **Dịch video dễ dàng với MKtranslate!** 📽️
 
-        Tải lên một video, tập tin âm thanh hoặc cung cấp một liên kết YouTube. 📽️ **Nhận sổ tay cập nhật từ kho chính thức: [SoniTranslate](https://github.com/R3gm/SoniTranslate)!**
+        Tải lên một video, tập tin âm thanh hoặc cung cấp một liên kết YouTube. 📽️ **Nhận sổ tay cập nhật từ kho chính thức: [MKtranslate](https://github.com/babiessilky-design/MKtranslate)!**
 
         Xem tab `Trợ giúp` để biết hướng dẫn cách sử dụng. Hãy bắt đầu vui vẻ với việc dịch video! 🚀🎉
         """,
@@ -2706,7 +2706,7 @@ language_data = {
 
         ---
 
-        # 🧩 **SoniTranslate hỗ trợ các công cụ TTS (Text-to-Speech) khác nhau, bao gồm:**
+        # 🧩 **MKtranslate hỗ trợ các công cụ TTS (Text-to-Speech) khác nhau, bao gồm:**
         - EDGE-TTS → định dạng `en-AU-WilliamNeural-Male` → Nhanh và chính xác.
         - FACEBOOK MMS → định dạng `en-facebook-mms VITS` → Giọng nói tự nhiên hơn; hiện tại chỉ sử dụng CPU.
         - PIPER TTS → định dạng `en_US-lessac-high VITS-onnx` → Giống như cái trước, nhưng được tối ưu hóa cho cả CPU và GPU.
@@ -2877,9 +2877,9 @@ language_data = {
     },
     "polish": {
         "description": """
-        ### 🎥 **Łatwe tłumaczenie filmów dzięki SoniTranslate!** 📽️
+        ### 🎥 **Łatwe tłumaczenie filmów dzięki MKtranslate!** 📽️
 
-        Prześlij film, plik dźwiękowy lub podaj link do YouTube. 📽️ **Pobierz aktualny notatnik ze strony oficjalnego repozytorium: [SoniTranslate](https://github.com/R3gm/SoniTranslate)!**
+        Prześlij film, plik dźwiękowy lub podaj link do YouTube. 📽️ **Pobierz aktualny notatnik ze strony oficjalnego repozytorium: [MKtranslate](https://github.com/babiessilky-design/MKtranslate)!**
 
         Zobacz zakładkę `Pomoc` w celu uzyskania instrukcji dotyczących korzystania z aplikacji. Zaczynajmy zabawę z tłumaczeniem filmów! 🚀🎉
         """,
@@ -2896,7 +2896,7 @@ language_data = {
 
         ---
 
-        # 🧩 **SoniTranslate obsługuje różne silniki TTS (tekst do mowy), które to:**
+        # 🧩 **MKtranslate obsługuje różne silniki TTS (tekst do mowy), które to:**
         - EDGE-TTS → format `en-AU-WilliamNeural-Male` → Szybki i dokładny.
         - FACEBOOK MMS → format `en-facebook-mms VITS` → Głos jest bardziej naturalny; obecnie wykorzystuje tylko CPU.
         - PIPER TTS → format `en_US-lessac-high VITS-onnx` → To samo co poprzednie, ale zoptymalizowane zarówno pod CPU, jak i GPU.
@@ -3067,9 +3067,9 @@ language_data = {
     },
     "swedish": {
         "description": """
-        ### 🎥 **Översätt videor enkelt med SoniTranslate!** 📽️
+        ### 🎥 **Översätt videor enkelt med MKtranslate!** 📽️
 
-        Ladda upp en video, ljudfil eller ange en YouTube-länk. 📽️ **Få den uppdaterade anteckningsboken från det officiella arkivet: [SoniTranslate](https://github.com/R3gm/SoniTranslate)!**
+        Ladda upp en video, ljudfil eller ange en YouTube-länk. 📽️ **Få den uppdaterade anteckningsboken från det officiella arkivet: [MKtranslate](https://github.com/babiessilky-design/MKtranslate)!**
 
         Se fliken `Hjälp` för instruktioner om hur du använder det. Nu ska vi ha roligt med videöversättning! 🚀🎉
         """,
@@ -3086,7 +3086,7 @@ language_data = {
 
         ---
 
-        # 🧩 **SoniTranslate stöder olika TTS (Text-to-Speech) motorer, vilka är:**
+        # 🧩 **MKtranslate stöder olika TTS (Text-to-Speech) motorer, vilka är:**
         - EDGE-TTS → format `en-AU-WilliamNeural-Male` → Snabbt och noggrant.
         - FACEBOOK MMS → format `en-facebook-mms VITS` → Rösten är mer naturlig; för tillfället använder den endast CPU.
         - PIPER TTS → format `en_US-lessac-high VITS-onnx` → Samma som den föregående, men den är optimerad för både CPU och GPU.
@@ -3257,9 +3257,9 @@ language_data = {
     },
     "korean": {
         "description": """
-        ### 🎥 **SoniTranslate를 사용하여 비디오를 쉽게 번역하세요!** 📽️
+        ### 🎥 **MKtranslate를 사용하여 비디오를 쉽게 번역하세요!** 📽️
 
-        비디오, 오디오 파일을 업로드하거나 YouTube 링크를 제공하세요. 📽️ **공식 저장소에서 최신 노트북을 받으세요.: [SoniTranslate](https://github.com/R3gm/SoniTranslate)!**
+        비디오, 오디오 파일을 업로드하거나 YouTube 링크를 제공하세요. 📽️ **공식 저장소에서 최신 노트북을 받으세요.: [MKtranslate](https://github.com/babiessilky-design/MKtranslate)!**
 
         사용 방법에 대한 지침은 `도움말` 탭을 참조하세요. 비디오 번역으로 즐거운 시간을 보내세요! 🚀🎉
         """,
@@ -3276,7 +3276,7 @@ language_data = {
 
         ---
 
-        # 🧩 **SoniTranslate는 다양한 TTS (텍스트 음성 변환) 엔진을 지원합니다. 이는 다음과 같습니다:**
+        # 🧩 **MKtranslate는 다양한 TTS (텍스트 음성 변환) 엔진을 지원합니다. 이는 다음과 같습니다:**
         - EDGE-TTS → 형식 `en-AU-WilliamNeural-Male` → 빠르고 정확합니다.
         - FACEBOOK MMS → 형식 `en-facebook-mms VITS` → 음성이 더 자연스럽지만 현재 CPU만 사용됩니다.
         - PIPER TTS → 형식 `en_US-lessac-high VITS-onnx` → 이전 것과 동일하지만 CPU와 GPU 모두 최적화되었습니다.
@@ -3447,9 +3447,9 @@ language_data = {
     },
     "marathi": {
         "description": """
-        ### 🎥 **आसानीसोबत SoniTranslate द्वारे व्हिडिओ अनुवाद करा!** 📽️
+        ### 🎥 **आसानीसोबत MKtranslate द्वारे व्हिडिओ अनुवाद करा!** 📽️
 
-        एक व्हिडिओ, ऑडिओ फाईल अपलोड करा किंवा एक YouTube लिंक प्रदान करा. 📽️ **अद्यतनित नोटबुक घ्या आधिकृत भंडारात।: [SoniTranslate](https://github.com/R3gm/SoniTranslate)!**
+        एक व्हिडिओ, ऑडिओ फाईल अपलोड करा किंवा एक YouTube लिंक प्रदान करा. 📽️ **अद्यतनित नोटबुक घ्या आधिकृत भंडारात।: [MKtranslate](https://github.com/babiessilky-design/MKtranslate)!**
 
         तपशील देखण्यासाठी 'मदत' टॅब पहा. व्हिडिओ अनुवादासोबत मजा करण्याची सुरवात करूया! 🚀🎉
         """,
@@ -3466,7 +3466,7 @@ language_data = {
 
         ---
 
-        # 🧩 **SoniTranslate विविध TTS (पाठ-टू-स्पीच) इंजिनसाठी समर्थन करते, ज्या म्हणजे:**
+        # 🧩 **MKtranslate विविध TTS (पाठ-टू-स्पीच) इंजिनसाठी समर्थन करते, ज्या म्हणजे:**
         - EDGE-TTS → स्वरूप `en-AU-WilliamNeural-Male` → जलद आणि खात्रीशील.
         - FACEBOOK MMS → स्वरूप `en-facebook-mms VITS` → ध्वनी अधिक प्राकृतिक आहे; ह्या क्षणी, हे केवळ CPU वापरते.
         - PIPER TTS → स्वरूप `en_US-lessac-high VITS-onnx` → म्हणजे अखेरचा, परंतु ह्यात CPU आणि GPU दोन्हीत अनुकूलित केले आहे.
@@ -3635,9 +3635,9 @@ language_data = {
     },
     "azerbaijani": {
         "description": """
-        ### 🎥 **SoniTranslate ilə videoları asanlıqla tərcümə edin!** 📽️
+        ### 🎥 **MKtranslate ilə videoları asanlıqla tərcümə edin!** 📽️
 
-        Video, səs faylı yükləyin və ya YouTube bağlantısı təqdim edin. 📽️ **SoniTranslate-in rəsmi repositoriyasından yenilənmiş qeydləri alın: [SoniTranslate](https://github.com/R3gm/SoniTranslate)!**
+        Video, səs faylı yükləyin və ya YouTube bağlantısı təqdim edin. 📽️ **MKtranslate-in rəsmi repositoriyasından yenilənmiş qeydləri alın: [MKtranslate](https://github.com/babiessilky-design/MKtranslate)!**
 
         İstifadəsi üçün təlimatlar üçün `Kömək` sekmesinə baxın. Video tərcüməsi ilə əyləncəyə başlayaq! 🚀🎉
         """,
@@ -3654,7 +3654,7 @@ language_data = {
 
         ---
 
-        # 🧩 **SoniTranslate, fərqli TTS (Mətnə Səsləndirmə) mühərriklərini dəstəkləyir ki, onlar:**
+        # 🧩 **MKtranslate, fərqli TTS (Mətnə Səsləndirmə) mühərriklərini dəstəkləyir ki, onlar:**
         - EDGE-TTS → format `en-AU-WilliamNeural-Male` → Sürətli və dəqiqdir.
         - FACEBOOK MMS → format `en-facebook-mms VITS` → Səsi daha doğaldır; ancaq ancaq CPU istifadə edir.
         - PIPER TTS → format `en_US-lessac-high VITS-onnx` → Əvvəlki ilə eynidir, ancaq hem CPU, hem də GPU üçün optimalaşdırılmışdır.
@@ -3826,9 +3826,9 @@ language_data = {
 
     "persian": {
         "description": """
-        ### 🎥 **با SoniTranslate به راحتی ویدئوها را ترجمه کنید!** 📽️
+        ### 🎥 **با MKtranslate به راحتی ویدئوها را ترجمه کنید!** 📽️
 
-        یک ویدئو، فایل زیرنویس، فایل صوتی را آپلود کنید یا یک لینک ویدئوی URL ارائه دهید. 📽️ **دفترچه یادداشت به‌روز شده را از مخزن رسمی دریافت کنید: [SoniTranslate](https://github.com/R3gm/SoniTranslate)!**
+        یک ویدئو، فایل زیرنویس، فایل صوتی را آپلود کنید یا یک لینک ویدئوی URL ارائه دهید. 📽️ **دفترچه یادداشت به‌روز شده را از مخزن رسمی دریافت کنید: [MKtranslate](https://github.com/babiessilky-design/MKtranslate)!**
 
         دستورالعمل‌های استفاده را در تب `Help` ببینید. بیایید با ترجمه ویدئوها سرگرم شویم! 🚀🎉
         """,
@@ -3845,7 +3845,7 @@ language_data = {
 
         ---
 
-        # 🧩 **SoniTranslate از موتورهای مختلف TTS (متن به گفتار) پشتیبانی می‌کند، که شامل:**
+        # 🧩 **MKtranslate از موتورهای مختلف TTS (متن به گفتار) پشتیبانی می‌کند، که شامل:**
         - EDGE-TTS → فرمت `en-AU-WilliamNeural-Male` → سریع و دقیق.
         - FACEBOOK MMS → فرمت `en-facebook-mms VITS` → صدای طبیعی‌تر؛ در حال حاضر فقط از CPU استفاده می‌کند.
         - PIPER TTS → فرمت `en_US-lessac-high VITS-onnx` → مانند قبلی، اما برای CPU و GPU بهینه‌سازی شده است.
@@ -4017,9 +4017,9 @@ language_data = {
 
     "afrikaans": {
         "description": """
-        ### 🎥 **Vertaal video's maklik met SoniTranslate!** 📽️
+        ### 🎥 **Vertaal video's maklik met MKtranslate!** 📽️
 
-        Laai 'n video, onderskrif, klanklêer op of verskaf 'n URL-videolink. 📽️ **Kry die opgedateerde notaboek van die amptelike repository: [SoniTranslate](https://github.com/R3gm/SoniTranslate)!**
+        Laai 'n video, onderskrif, klanklêer op of verskaf 'n URL-videolink. 📽️ **Kry die opgedateerde notaboek van die amptelike repository: [MKtranslate](https://github.com/babiessilky-design/MKtranslate)!**
 
         Sien die tab 'Hulp' vir instruksies oor hoe om dit te gebruik. Kom ons begin pret hê met videovertaal! 🚀🎉
         """,
@@ -4036,7 +4036,7 @@ language_data = {
 
         ---
 
-        # 🧩 **SoniTranslate ondersteun verskillende TTS (Teks-na-Spraak) enjins, wat is:**
+        # 🧩 **MKtranslate ondersteun verskillende TTS (Teks-na-Spraak) enjins, wat is:**
         - EDGE-TTS → formaat `en-AU-WilliamNeural-Male` → Vinnig en akkuraat.
         - FACEBOOK MMS → formaat `en-facebook-mms VITS` → Die stem is meer natuurlik; op die oomblik gebruik dit net CPU.
         - PIPER TTS → formaat `en_US-lessac-high VITS-onnx` → Dieselfde as die vorige een, maar dit is geoptimaliseer vir beide CPU en GPU.

@@ -84,23 +84,35 @@ class OmniVoiceProvider(BaseTTSProvider):
         ref_audio = None
         ref_text = None
         ref_txt_path = None
-        
-        for vdir in voice_lib_dirs:
-            if not os.path.exists(vdir):
-                continue
-            for ext in [".wav", ".mp3", ".flac"]:
-                cand = os.path.join(vdir, f"{voice_name}{ext}")
-                if os.path.exists(cand):
-                    ref_audio = os.path.abspath(cand)
-                    cand_txt = os.path.join(vdir, f"{voice_name}.txt")
-                    if os.path.exists(cand_txt):
-                        ref_txt_path = os.path.abspath(cand_txt)
+
+        names_to_try = [voice_name]
+        v_low = voice_name.lower()
+        if v_low in ["cosy", "f5-tts_cosy"]:
+            names_to_try = ["cosy", "f5-tts_cosy"]
+        elif v_low in ["ref_homme_fr", "ref_homme", "homme"]:
+            names_to_try = ["ref_homme_fr", "ref_homme", "homme"]
+        elif v_low in ["ref_femme_fr", "ref_femme", "femme"]:
+            names_to_try = ["ref_femme_fr", "ref_femme", "femme"]
+
+        for vname in names_to_try:
+            for vdir in voice_lib_dirs:
+                if not os.path.exists(vdir):
+                    continue
+                for ext in [".wav", ".mp3", ".flac"]:
+                    cand = os.path.join(vdir, f"{vname}{ext}")
+                    if os.path.exists(cand):
+                        ref_audio = os.path.abspath(cand)
+                        cand_txt = os.path.join(vdir, f"{vname}.txt")
+                        if os.path.exists(cand_txt):
+                            ref_txt_path = os.path.abspath(cand_txt)
+                        break
+                if ref_audio:
                     break
             if ref_audio:
                 break
 
         if not ref_audio:
-            for fallback_name in ["ref_homme_fr", "ref_femme_fr"]:
+            for fallback_name in ["ref_homme_fr", "ref_femme_fr", "cosy", "f5-tts_cosy"]:
                 for vdir in voice_lib_dirs:
                     cand = os.path.join(vdir, f"{fallback_name}.wav")
                     if os.path.exists(cand):

@@ -423,7 +423,7 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
                 logger.error(f"ElevenLabs Error: {str(e)}")
                 
         # LOGIQUE DE TA BIBLIOTHÈQUE DE VOIX (F5-TTS, ChatterBox, OmniVoice)
-        elif voice.startswith("Custom/") or voice.startswith("ChatterBox/") or voice.startswith("Chatterbox/"):
+        elif voice.startswith("Custom/") or voice.startswith("ChatterBox/") or voice.startswith("Chatterbox/") or voice.startswith("OmniVoice/") or voice.startswith("Omnivoice/"):
             voice_name = voice.split("/")[-1]
             try:
                 # Localisation dynamique du dossier voice_library (local, soni_translate, ou Colab)
@@ -438,23 +438,36 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
                 
                 ref_audio = None
                 ref_txt_path = None
-                for vdir in voice_lib_dirs:
-                    if not os.path.exists(vdir):
-                        continue
-                    for ext in [".wav", ".mp3", ".flac"]:
-                        cand = os.path.join(vdir, f"{voice_name}{ext}")
-                        if os.path.exists(cand):
-                            ref_audio = cand
-                            cand_txt = os.path.join(vdir, f"{voice_name}.txt")
-                            if os.path.exists(cand_txt):
-                                ref_txt_path = cand_txt
+
+                names_to_try = [voice_name]
+                v_low = voice_name.lower()
+                if v_low in ["cosy", "f5-tts_cosy"]:
+                    names_to_try = ["cosy", "f5-tts_cosy"]
+                elif v_low in ["ref_homme_fr", "ref_homme", "homme"]:
+                    names_to_try = ["ref_homme_fr", "ref_homme", "homme"]
+                elif v_low in ["ref_femme_fr", "ref_femme", "femme"]:
+                    names_to_try = ["ref_femme_fr", "ref_femme", "femme"]
+
+                for vname in names_to_try:
+                    for vdir in voice_lib_dirs:
+                        if not os.path.exists(vdir):
+                            continue
+                        for ext in [".wav", ".mp3", ".flac"]:
+                            cand = os.path.join(vdir, f"{vname}{ext}")
+                            if os.path.exists(cand):
+                                ref_audio = cand
+                                cand_txt = os.path.join(vdir, f"{vname}.txt")
+                                if os.path.exists(cand_txt):
+                                    ref_txt_path = cand_txt
+                                break
+                        if ref_audio:
                             break
                     if ref_audio:
                         break
 
                 if not ref_audio:
                     # Fallback sur une voix par défaut du projet si introuvable
-                    for fallback_name in ["ref_homme_fr", "ref_femme_fr"]:
+                    for fallback_name in ["ref_homme_fr", "ref_femme_fr", "cosy", "f5-tts_cosy"]:
                         for vdir in voice_lib_dirs:
                             cand = os.path.join(vdir, f"{fallback_name}.wav")
                             if os.path.exists(cand):
@@ -467,13 +480,15 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
                     with open(ref_txt_path, "r", encoding="utf-8") as f:
                         ref_text = f.read().strip()
                 else:
-                    ref_text = "Hello there."
+                    ref_text = None  # None permet à OmniVoice de transcrire fidèlement avec Whisper
                 
                 # Détermination du moteur de clonage
-                if voice.startswith("ChatterBox/") or voice.startswith("Chatterbox/"):
+                if voice.startswith("OmniVoice/") or voice.startswith("Omnivoice/"):
+                    cloning_engine = "OmniVoice"
+                elif voice.startswith("ChatterBox/") or voice.startswith("Chatterbox/"):
                     cloning_engine = "ChatterBox Multilingual"
                 else:
-                    cloning_engine = os.getenv("CUSTOM_CLONING_ENGINE", "F5-TTS")
+                    cloning_engine = os.getenv("CUSTOM_CLONING_ENGINE", "OmniVoice")
                 
                 # Déterminisme et stabilité du timbre (Seed fixe anti-dérive)
                 torch.manual_seed(42)
@@ -559,15 +574,31 @@ class TTS_Info:
         )
         
         # Scan dynamique automatique de ton dossier 'voice_library' !
-        list_custom_library = []
+        list_custom_library = [
+            "OmniVoice/ref_homme_fr",
+            "OmniVoice/ref_femme_fr",
+            "OmniVoice/cosy",
+            "Custom/ref_homme_fr",
+            "Custom/ref_femme_fr",
+            "Custom/cosy",
+            "ChatterBox/ref_homme_fr",
+            "ChatterBox/ref_femme_fr",
+            "ChatterBox/cosy",
+        ]
         for vlib_dir in ["voice_library", os.path.join("soni_translate", "voice_library")]:
             if os.path.exists(vlib_dir):
                 for file in os.listdir(vlib_dir):
                     if file.lower().endswith(('.wav', '.mp3', '.flac')):
                         clean_name = file.rsplit('.', 1)[0]
-                        v_id = f"Custom/{clean_name}"
-                        if v_id not in list_custom_library:
-                            list_custom_library.append(v_id)
+                        for prefix in ["OmniVoice", "Custom", "ChatterBox"]:
+                            v_id = f"{prefix}/{clean_name}"
+                            if v_id not in list_custom_library:
+                                list_custom_library.append(v_id)
+                        if clean_name == "f5-tts_cosy":
+                            for prefix in ["OmniVoice", "Custom", "ChatterBox"]:
+                                v_id = f"{prefix}/cosy"
+                                if v_id not in list_custom_library:
+                                    list_custom_library.append(v_id)
         
         # Liste étendue des meilleures voix internationales
         list_custom_voices = [
@@ -930,7 +961,7 @@ class SoniTranslate(SoniTrCache):
         default_male_voice="fr-FR-HenriNeural-Male",     # <--- AJOUTE CETTE LIGNE
         default_female_voice="fr-FR-DeniseNeural-Female", # <--- AJOUTE CETTE LIGNE
         gemini_tts_model="gemini-2.5-flash-preview-tts", # <--- AJOUTÉ
-        custom_cloning_engine="F5-TTS",
+        custom_cloning_engine="OmniVoice",
         is_gui=False,             # <--- DOIT ÊTRE ICI
         progress=gr.Progress(),   # <--- DOIT RESTER TOUT À LA FIN
     ):
@@ -1998,11 +2029,11 @@ class SoniTranslate(SoniTrCache):
         return output
 
 
-title = "<center><strong><font size='7'>📽️ SoniTranslate 🈷️</font></strong></center>"
+title = "<center><strong><font size='7'>📽️ MKtranslate 🈷️</font></strong></center>"
 
 
 def create_gui(theme, logs_in_gui=False):
-    with gr.Blocks(theme=theme) as app:
+    with gr.Blocks(theme=theme, title="MKtranslate") as app:
         gr.Markdown(title)
         gr.Markdown(lg_conf["description"])
 
@@ -2530,10 +2561,10 @@ def create_gui(theme, logs_in_gui=False):
                                 interactive=True
                             )
                             custom_cloning_engine_gui = gr.Dropdown(
-                                choices=["F5-TTS", "ChatterBox Multilingual", "OmniVoice"],
-                                value="F5-TTS",
+                                choices=["OmniVoice", "ChatterBox Multilingual", "F5-TTS"],
+                                value="OmniVoice",
                                 label="Custom Cloning Engine",
-                                info="Sélectionnez le moteur à utiliser pour cloner les voix commençant par 'Custom/'.",
+                                info="Sélectionnez le moteur à utiliser pour cloner les voix commençant par 'Custom/' (OmniVoice par défaut).",
                                 interactive=True
                             )
                             
@@ -3480,13 +3511,21 @@ if __name__ == "__main__":
                     if file.lower().endswith(('.wav', '.mp3', '.flac')):
                         clean_name = file.rsplit('.', 1)[0]
                         v_id = f"Custom/{clean_name}"
+                        v_omni = f"OmniVoice/{clean_name}"
                         if v_id not in list_custom_library:
                             list_custom_library.append(v_id)
+                        if v_omni not in list_custom_library:
+                            list_custom_library.append(v_omni)
         
         list_custom_voices = [
             # --- TES VOIX DE RÉFÉRENCE FORCEES EN DUR (SÉCURITÉ UI) ---
+            "OmniVoice/cosy",
+            "OmniVoice/ref_homme_fr",
+            "OmniVoice/ref_femme_fr",
+            "Custom/cosy",
             "Custom/ref_homme_fr",
             "Custom/ref_femme_fr",
+            "ChatterBox/cosy",
             "ChatterBox/ref_homme_fr",
             "ChatterBox/ref_femme_fr",
             
