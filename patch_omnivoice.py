@@ -108,5 +108,30 @@ def patch():
                 except Exception as e:
                     print(f"[MKtranslate Patch] Erreur copie cosy.wav: {e}")
 
+    # 9. Correction du bug zero-size array dans omnivoice
+    for root, dirs, files in os.walk(base_dir):
+        for fname in files:
+            if fname.endswith("omnivoice.py"):
+                fpath = os.path.join(root, fname)
+                try:
+                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f_omni:
+                        omni_code = f_omni.read()
+                    changed = False
+                    if "peak = np.abs(generated_audio).max()" in omni_code and "if generated_audio.size > 0:" not in omni_code:
+                        omni_code = omni_code.replace(
+                            "peak = np.abs(generated_audio).max()",
+                            "peak = np.abs(generated_audio).max() if generated_audio.size > 0 else 0.0"
+                        )
+                        changed = True
+                    if "postprocess_output=True" in omni_code:
+                        omni_code = omni_code.replace("postprocess_output=True", "postprocess_output=False")
+                        changed = True
+                    if changed:
+                        with open(fpath, "w", encoding="utf-8") as f_omni:
+                            f_omni.write(omni_code)
+                        print(f"[MKtranslate Patch] {fpath} patché contre le bug zero-size array !")
+                except Exception:
+                    pass
+
 if __name__ == "__main__":
     patch()

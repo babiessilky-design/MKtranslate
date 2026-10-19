@@ -188,6 +188,16 @@ class OmniVoiceProvider(BaseTTSProvider):
         # num_step: 32 étapes pour une synthèse propre et nette
         num_step = int(kwargs.get("num_step", 32))
 
+        clean_text = text.strip()
+        sample_rate = getattr(model, "sampling_rate", 24000) or 24000
+
+        # Si le texte ne contient aucun caractère alphanumérique (ex: ".", "...", "-"), on crée un micro-silence
+        if not any(c.isalnum() for c in clean_text):
+            os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
+            silence_arr = np.zeros(int(sample_rate * 0.4), dtype=np.float32)
+            sf.write(output_file, silence_arr, sample_rate)
+            return
+
         gen_config = OmniVoiceGenerationConfig(
             num_step=num_step,
             guidance_scale=guidance_scale,
@@ -195,27 +205,31 @@ class OmniVoiceProvider(BaseTTSProvider):
             class_temperature=0.0,  # Échantillonnage déterministe
             denoise=True,
             preprocess_prompt=True,
-            postprocess_output=True,
+            postprocess_output=False,  # Désactivé : évite que remove_silence ne vide les segments courts !
         )
 
         speed = float(kwargs.get("speed", 1.0))
 
         # Synthèse vocale avec conditionnement exact du profil vocal et de la langue
         wav = model.generate(
-            text=text.strip(),
+            text=clean_text,
             language=lang_id,
             voice_clone_prompt=prompt,
             generation_config=gen_config,
             speed=speed
         )
         
-        wav_out = wav[0]
-        sample_rate = getattr(model, "sampling_rate", 24000) or 24000
+        wav_out = wav[0] if (wav is not None and len(wav) > 0) else np.array([], dtype=np.float32)
 
-        # Normalisation anti-clipping
-        max_val = np.abs(wav_out).max()
-        if max_val > 1.0:
-            wav_out = wav_out / max_val * 0.98
+        # Protection absolue contre les tableaux audio vides
+        if wav_out is None or getattr(wav_out, "size", len(wav_out)) == 0:
+            self.logger.warning(f"OmniVoice a produit un segment vide pour '{clean_text[:30]}'. Utilisation d'un silence de secours.")
+            wav_out = np.zeros(int(sample_rate * 0.4), dtype=np.float32)
+        else:
+            # Normalisation anti-clipping sécurisée
+            max_val = float(np.abs(wav_out).max())
+            if max_val > 1.0:
+                wav_out = wav_out / max_val * 0.98
 
         os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
         try:
