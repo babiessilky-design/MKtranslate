@@ -967,6 +967,15 @@ class SoniTranslate(SoniTrCache):
         os.environ["GEMINI_TTS_MODEL"] = gemini_tts_model
         os.environ["CUSTOM_CLONING_ENGINE"] = custom_cloning_engine
         # ======================================================================
+        # SYNCHRONISATION AUTOMATIQUE : MIN_SPEAKERS SUIT MAX_SPEAKERS
+        # Quand l'utilisateur choisit 2 locuteurs, PyAnote est OBLIGÉ d'en trouver 2
+        # ======================================================================
+        if max_speakers > 1:
+            min_speakers = max_speakers
+            logger.info(f"Auto-Sync Speakers: min_speakers set to {min_speakers} (matching max_speakers={max_speakers})")
+        else:
+            min_speakers = 1
+        # ======================================================================
         
         if not YOUR_HF_TOKEN:
             YOUR_HF_TOKEN = os.getenv("YOUR_HF_TOKEN")

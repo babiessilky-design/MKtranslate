@@ -82,6 +82,13 @@ def patch():
             'list_custom_library = ["OmniVoice/ref_homme_fr", "OmniVoice/ref_femme_fr", "OmniVoice/cosy", "Custom/ref_homme_fr", "Custom/ref_femme_fr", "Custom/cosy"]'
         )
 
+    # 8. Synchronisation automatique min_speakers = max_speakers pour forcer PyAnote
+    if "SYNCHRONISATION AUTOMATIQUE : MIN_SPEAKERS SUIT MAX_SPEAKERS" not in content:
+        content = content.replace(
+            'if not YOUR_HF_TOKEN:',
+            '# SYNCHRONISATION AUTOMATIQUE : MIN_SPEAKERS SUIT MAX_SPEAKERS\n        if max_speakers > 1:\n            min_speakers = max_speakers\n            logger.info(f"Auto-Sync Speakers: min_speakers set to {min_speakers} (matching max_speakers={max_speakers})")\n        else:\n            min_speakers = 1\n\n        if not YOUR_HF_TOKEN:'
+        )
+
     with open(target_file, "w", encoding="utf-8") as f:
         f.write(content)
 
