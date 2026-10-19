@@ -1113,108 +1113,101 @@ def accelerate_segments(
 
     for i, segment in tqdm(enumerate(result_diarize["segments"])):
         text = segment["text"]  # noqa
-        start = float(segment["start"])
-        end = float(segment["end"])
+        start = segment["start"]
+        end = segment["end"]
         speaker = segment["speaker"]
 
+        # find name audio
+        # if speaker in speakers_edge:
         filename = f"audio/{start}.ogg"
-        if not os.path.exists(filename):
-            wav_cand = f"audio/{start}.wav"
-            if os.path.exists(wav_cand):
-                filename = wav_cand
+        # elif speaker in speakers_bark + speakers_vits + speakers_coqui + speakers_vits_onnx:
+        #    filename = f"audio/{start}.wav" # wav
 
-        # Mesure robuste de la durée réelle TTS
-        duration_true = max(0.1, end - start)
+        # duration
+        duration_true = end - start
         try:
-            duration_tts = len(AudioSegment.from_file(filename)) / 1000.0
+            duration_tts = librosa.get_duration(filename=filename)
         except Exception:
             try:
                 duration_tts = librosa.get_duration(path=filename)
             except Exception:
-                try:
-                    duration_tts = librosa.get_duration(filename=filename)
-                except Exception:
-                    duration_tts = duration_true
+                duration_tts = duration_true
 
-        # Ratio d'accélération brut nécessaire
+        # Accelerate percentage
         acc_percentage = duration_tts / duration_true
 
-        # Régulation intelligente du taux d'accélération (Smooth regulation)
-        if acceleration_rate_regulation and acc_percentage >= 1.15:
+        # Smoth
+        if acceleration_rate_regulation and acc_percentage >= 1.3:
             try:
-                if i < max_count_segments_idx:
-                    next_segment = result_diarize["segments"][i + 1]
-                    next_start = float(next_segment["start"])
-                    next_speaker = next_segment.get("speaker", "")
-                    duration_with_next_start = next_start - start
+                next_segment = result_diarize["segments"][
+                    min(max_count_segments_idx, i + 1)
+                ]
+                next_start = next_segment["start"]
+                next_speaker = next_segment["speaker"]
+                duration_with_next_start = next_start - start
 
-                    # Si du silence naturel sépare ce segment du prochain, on l'utilise pour adoucir la vitesse
-                    if duration_with_next_start > duration_true:
-                        extra_time = duration_with_next_start - duration_true
-                        factor = 0.8 if speaker == next_speaker else 0.6
-                        smoth_duration = duration_true + (extra_time * factor)
-                        smoth_acc = duration_tts / smoth_duration
-                        acc_percentage = min(acc_percentage, max(1.0, smoth_acc))
-                        logger.info(
-                            f"Segment {start}s: Régulation appliquée -> acc réduite de "
-                            f"{duration_tts / duration_true:.2f}x à {acc_percentage:.2f}x"
-                        )
+                if duration_with_next_start > duration_true:
+                    extra_time = duration_with_next_start - duration_true
+
+                    if speaker == next_speaker:
+                        # half
+                        smoth_duration = duration_true + (extra_time * 0.5)
+                    else:
+                        # 7/10
+                        smoth_duration = duration_true + (extra_time * 0.7)
+                    logger.debug(
+                        f"Base acc: {acc_percentage}, "
+                        f"smoth acc: {duration_tts / smoth_duration}"
+                    )
+                    acc_percentage = max(1.2, (duration_tts / smoth_duration))
+
             except Exception as error:
-                logger.error(f"Erreur régulation accélération : {error}")
+                logger.error(str(error))
 
-        # Bornage selon max_accelerate_audio
         if acc_percentage > max_accelerate_audio:
             acc_percentage = max_accelerate_audio
-        elif 0.90 <= acc_percentage <= 1.05:
+        elif acc_percentage <= 1.15 and acc_percentage >= 0.8:
             acc_percentage = 1.0
-        elif acc_percentage < 0.90:
-            acc_percentage = 0.90
+        elif acc_percentage <= 0.79:
+            acc_percentage = 0.8
 
-        # Arrondi précis à 2 décimales pour un calage millimétré
-        acc_percentage = round(float(acc_percentage), 2)
+        # Round
+        acc_percentage = round(acc_percentage + 0.0, 1)
 
-        # Application de l'accélération via FFmpeg vers audio2/
-        target_out = f"{folder_output}/{filename}"
-        os.makedirs(os.path.dirname(target_out), exist_ok=True)
+        # Format read if need
+        if speaker in speakers_edge:
+            try:
+                info_enc = sf.info(filename).format
+            except Exception:
+                info_enc = "OGG"
+        else:
+            info_enc = "OGG"
 
-        if acc_percentage == 1.0:
+        # Apply aceleration or opposite to the audio file in folder_output folder
+        if acc_percentage == 1.0 and info_enc == "OGG":
             copy_files(filename, f"{folder_output}{os.sep}audio")
         else:
-            cur_speed = float(acc_percentage)
-            tempo_filters = []
-            while cur_speed > 2.0:
-                tempo_filters.append("atempo=2.0")
-                cur_speed /= 2.0
-            while cur_speed < 0.5:
-                tempo_filters.append("atempo=0.5")
-                cur_speed /= 0.5
-            tempo_filters.append(f"atempo={cur_speed:.4f}")
-            atempo_str = ",".join(tempo_filters)
+            os.system(
+                f"ffmpeg -y -loglevel panic -i {filename} -filter:a atempo={acc_percentage} {folder_output}/{filename}"
+            )
 
-            # Encodage explicite libvorbis pour conteneur .ogg (évite exit code 1 'FLAC in OGG experimental')
-            cmd = [
-                "ffmpeg", "-y", "-loglevel", "error",
-                "-i", str(filename),
-                "-filter:a", atempo_str,
-                "-c:a", "libvorbis", "-q:a", "4",
-                str(target_out)
-            ]
-            ret = subprocess.run(cmd, capture_output=True, text=True)
-            if ret.returncode != 0 or not os.path.exists(target_out) or os.path.getsize(target_out) == 0:
-                logger.warning(f"FFmpeg libvorbis error ({ret.stderr.strip()}). Tentative fallback...")
-                cmd_fallback = [
-                    "ffmpeg", "-y", "-loglevel", "error",
-                    "-i", str(filename),
-                    "-filter:a", atempo_str,
-                    str(target_out)
-                ]
-                subprocess.run(cmd_fallback, check=False)
-
-            if not os.path.exists(target_out) or os.path.getsize(target_out) == 0:
-                logger.error(f"Échec accélération pour {filename}, copie fichier original.")
-                copy_files(filename, f"{folder_output}{os.sep}audio")
-            else:
-                logger.info(f"Segment {start}s accéléré x{acc_percentage} ({duration_tts:.2f}s -> {duration_tts / acc_percentage:.2f}s)")
+        if logger.isEnabledFor(logging.DEBUG):
+            try:
+                duration_create = librosa.get_duration(
+                    filename=f"{folder_output}/{filename}"
+                )
+            except Exception:
+                try:
+                    duration_create = librosa.get_duration(
+                        path=f"{folder_output}/{filename}"
+                    )
+                except Exception:
+                    duration_create = duration_tts
+            logger.debug(
+                f"acc_percen is {acc_percentage}, tts duration "
+                f"is {duration_tts}, new duration is {duration_create}"
+                f", for {filename}"
+            )
 
         audio_files.append(f"{folder_output}/{filename}")
         speaker = "TTS Speaker {:02d}".format(int(speaker[-2:]) + 1)
