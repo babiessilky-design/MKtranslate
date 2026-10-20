@@ -21,6 +21,10 @@ def patch():
     with open(target_file, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
+    # 0. S'assurer que 'import re' est bien présent
+    if "\nimport re\n" not in content and "import re" not in content[:500]:
+        content = content.replace("import sys\n", "import sys\nimport re\n")
+
     # 1. Définition et injection de is_custom_ai_voice
     custom_func_code = '''    def is_custom_ai_voice(v):
         if not isinstance(v, str):
