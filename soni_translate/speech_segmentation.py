@@ -290,7 +290,7 @@ def parse_gemini_transcription(text_resp, default_lang="en", audio_duration=None
 def gemini_api_transcribe(
     input_audio_file,
     source_lang=None,
-    model_name="gemini-3.5-transcribe",
+    model_name="gemini-3.8-flash",
     max_speakers=None,
 ):
     """
@@ -340,19 +340,38 @@ def gemini_api_transcribe(
         logger.debug(f"Vérification de l'état du fichier ignorée ({e_poll})")
 
     try:
+        # Détection dynamique des modèles actifs sur la clé de l'utilisateur
+        available_api_models = []
+        try:
+            if hasattr(client, "models") and hasattr(client.models, "list"):
+                for m in client.models.list():
+                    m_name = getattr(m, "name", "") or ""
+                    clean_m = m_name.replace("models/", "")
+                    if "2.0" not in clean_m:
+                        available_api_models.append(clean_m)
+        except Exception as e_list:
+            logger.debug(f"Impossible de lister les modèles API ({e_list})")
+
         candidate_models = [
             os.environ.get("GEMINI_TRANSCRIBE_MODEL", model_name),
-            "gemini-3.5-transcribe",
             "gemini-3.8-flash",
+            "gemini-3.5-transcribe",
             "gemini-3.7-flash",
             "gemini-3.5-flash",
-            "gemini-3.8-pro",
             "gemini-2.5-flash",
-            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+            "gemini-3.8-pro",
+            "gemini-2.5-pro",
+            "gemini-1.5-pro",
         ]
+        for m in available_api_models:
+            if ("flash" in m.lower() or "transcribe" in m.lower()) and "2.0" not in m:
+                if m not in candidate_models:
+                    candidate_models.append(m)
+
         unique_models = []
         for m in candidate_models:
-            if m and m not in unique_models:
+            if m and m not in unique_models and "2.0" not in m:
                 unique_models.append(m)
 
         lang_instruction = (
@@ -421,6 +440,10 @@ CRITICAL RULES:
         def extract_text(resp):
             if not resp:
                 return ""
+            if isinstance(resp, str):
+                return resp
+            if hasattr(resp, "output_text") and resp.output_text:
+                return resp.output_text
             if hasattr(resp, "text") and resp.text:
                 return resp.text
             if hasattr(resp, "candidates") and resp.candidates:
@@ -434,41 +457,63 @@ CRITICAL RULES:
         for mod in unique_models:
             try:
                 logger.info(f"Gemini Transcribe : Tentative avec le modèle '{mod}'...")
+                response_text = ""
 
-                if "transcribe" in mod.lower():
-                    # Le modèle dédié de transcription ne supporte PAS response_mime_type="application/json"
-                    logger.info(f"Mode audio direct sans contrainte JSON pour '{mod}'...")
+                # 1. Priorité absolue : Interactions API (Recommandé officiellement par Google pour gemini-3.8-flash)
+                if hasattr(client, "interactions") and hasattr(client.interactions, "create"):
                     try:
-                        response = client.models.generate_content(
+                        inter_input = [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "audio",
+                                "uri": getattr(uploaded_file, "uri", None) or getattr(uploaded_file, "name", None),
+                                "mime_type": getattr(uploaded_file, "mime_type", "audio/wav") or "audio/wav",
+                            }
+                        ]
+                        interaction = client.interactions.create(
                             model=mod,
-                            contents=[uploaded_file, prompt]
+                            input=inter_input
                         )
-                    except Exception as err_prompt:
-                        logger.warning(f"Appel avec prompt sur '{mod}' a échoué ({err_prompt}), tentative audio seul...")
-                        response = client.models.generate_content(
-                            model=mod,
-                            contents=[uploaded_file]
-                        )
-                else:
-                    # Modèles multimodaux généraux (gemini-3.8-flash, etc.) : support du mode JSON
-                    try:
-                        config = types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            temperature=0.1,
-                        )
-                        response = client.models.generate_content(
-                            model=mod,
-                            contents=[uploaded_file, prompt],
-                            config=config
-                        )
-                    except Exception as err_json:
-                        logger.warning(f"Mode JSON refusé pour '{mod}' ({err_json}), tentative sans config JSON...")
-                        response = client.models.generate_content(
-                            model=mod,
-                            contents=[uploaded_file, prompt]
-                        )
+                        response_text = extract_text(interaction)
+                    except Exception as err_inter:
+                        logger.debug(f"Interactions API non disponible pour '{mod}' ({err_inter}), essai generate_content...")
 
-                response_text = extract_text(response)
+                # 2. Repli : client.models.generate_content
+                if not response_text.strip():
+                    if "transcribe" in mod.lower():
+                        # Modèle dédié de transcription (mode audio direct)
+                        logger.info(f"Mode audio direct pour '{mod}'...")
+                        try:
+                            response = client.models.generate_content(
+                                model=mod,
+                                contents=[uploaded_file, prompt]
+                            )
+                        except Exception as err_prompt:
+                            logger.warning(f"Appel avec prompt sur '{mod}' a échoué ({err_prompt}), tentative audio seul...")
+                            response = client.models.generate_content(
+                                model=mod,
+                                contents=[uploaded_file]
+                            )
+                    else:
+                        # Modèles multimodaux généraux (gemini-3.8-flash, etc.)
+                        try:
+                            config = types.GenerateContentConfig(
+                                response_mime_type="application/json",
+                                temperature=0.1,
+                            )
+                            response = client.models.generate_content(
+                                model=mod,
+                                contents=[uploaded_file, prompt],
+                                config=config
+                            )
+                        except Exception as err_json:
+                            logger.warning(f"Mode JSON refusé pour '{mod}' ({err_json}), tentative sans config JSON...")
+                            response = client.models.generate_content(
+                                model=mod,
+                                contents=[uploaded_file, prompt]
+                            )
+                    response_text = extract_text(response)
+
                 if response_text.strip():
                     logger.info(f"Gemini Transcribe : Succès avec le modèle '{mod}' !")
                     break
