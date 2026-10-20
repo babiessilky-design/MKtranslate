@@ -290,7 +290,7 @@ def parse_gemini_transcription(text_resp, default_lang="en", audio_duration=None
 def gemini_api_transcribe(
     input_audio_file,
     source_lang=None,
-    model_name="gemini-3.8-flash",
+    model_name="gemini-3.5-transcribe",
     max_speakers=None,
 ):
     """
@@ -352,22 +352,27 @@ def gemini_api_transcribe(
         except Exception as e_list:
             logger.debug(f"Impossible de lister les modèles API ({e_list})")
 
-        candidate_models = [
-            os.environ.get("GEMINI_TRANSCRIBE_MODEL", model_name),
-            "gemini-3.8-flash",
-            "gemini-3.5-transcribe",
-            "gemini-3.7-flash",
-            "gemini-3.5-flash",
-            "gemini-2.5-flash",
-            "gemini-1.5-flash",
-            "gemini-3.8-pro",
-            "gemini-2.5-pro",
-            "gemini-1.5-pro",
-        ]
-        for m in available_api_models:
-            if ("flash" in m.lower() or "transcribe" in m.lower()) and "2.0" not in m:
-                if m not in candidate_models:
-                    candidate_models.append(m)
+        # Modèles avec 'transcribe' d'abord, puis les modèles flash en fallback
+        transcribe_api_models = [m for m in available_api_models if "transcribe" in m.lower() and "2.0" not in m]
+        flash_api_models = [m for m in available_api_models if "flash" in m.lower() and "transcribe" not in m.lower() and "2.0" not in m]
+
+        candidate_models = (
+            [os.environ.get("GEMINI_TRANSCRIBE_MODEL", model_name), "gemini-3.5-transcribe"]
+            + transcribe_api_models
+            + [
+                "gemini-3.8-flash",
+                "gemini-3.7-flash",
+                "gemini-3.5-flash",
+                "gemini-2.5-flash",
+                "gemini-1.5-flash",
+            ]
+            + flash_api_models
+            + [
+                "gemini-3.8-pro",
+                "gemini-2.5-pro",
+                "gemini-1.5-pro",
+            ]
+        )
 
         unique_models = []
         for m in candidate_models:
