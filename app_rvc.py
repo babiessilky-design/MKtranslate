@@ -3,6 +3,7 @@
 # ==============================================================================
 import os
 import sys
+import re
 import types
 import ctypes
 from collections import namedtuple
@@ -309,6 +310,7 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
     def sanitize_tts_text(t):
         if not t:
             return ""
+        import re
         # 1. Supprimer les indications de sous-titres / bruitages entre crochets, parenthèses ou astérisques
         t = re.sub(r'\[.*?\]', ' ', t)
         t = re.sub(r'\(.*?\)', ' ', t)
