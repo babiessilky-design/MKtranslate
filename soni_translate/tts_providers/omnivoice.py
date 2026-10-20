@@ -185,8 +185,8 @@ class OmniVoiceProvider(BaseTTSProvider):
         # position_temperature: 0.0 pour un échantillonnage déterministe et stable
         position_temperature = float(kwargs.get("position_temperature", os.getenv("OMNIVOICE_POS_TEMP", 0.0)))
         
-        # num_step: 32 étapes pour une synthèse propre et nette
-        num_step = int(kwargs.get("num_step", 32))
+        # num_step: 48 étapes pour une fidélité acoustique supérieure, grain soyeux et élimination des artefacts de diffusion
+        num_step = int(kwargs.get("num_step", os.getenv("OMNIVOICE_NUM_STEP", 48)))
 
         clean_text = text.strip()
         sample_rate = getattr(model, "sampling_rate", 24000) or 24000
@@ -238,10 +238,10 @@ class OmniVoiceProvider(BaseTTSProvider):
             self.logger.warning(f"OmniVoice a produit un segment vide pour '{clean_text[:30]}'. Utilisation d'un silence de secours.")
             wav_out = np.zeros(int(sample_rate * 0.4), dtype=np.float32)
         else:
-            # Normalisation anti-clipping sécurisée
+            # Normalisation studio broadcast (-1.0 dBFS, amplitude crête 0.89)
             max_val = float(np.abs(wav_out).max())
-            if max_val > 1.0:
-                wav_out = wav_out / max_val * 0.98
+            if max_val > 0.01:
+                wav_out = (wav_out / max_val) * 0.89
 
             # Fondu sortant doux de 50ms pour éliminer tout souffle résiduel ou clic
             fade_len = int(sample_rate * 0.05)

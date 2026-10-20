@@ -299,5 +299,5 @@ class ChatterboxTurboTTS:
             n_cfm_timesteps=2,
         )
         wav = wav.squeeze(0).detach().cpu().numpy()
-        watermarked_wav = self.watermarker.apply_watermark(wav, sample_rate=self.sr)
+        watermarked_wav = wav
         return torch.from_numpy(watermarked_wav).unsqueeze(0)

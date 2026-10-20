@@ -1137,7 +1137,7 @@ def accelerate_segments(
         acc_percentage = duration_tts / duration_true
 
         # Smoth
-        if acceleration_rate_regulation and acc_percentage >= 1.3:
+        if acceleration_rate_regulation and acc_percentage >= 1.2:
             try:
                 next_segment = result_diarize["segments"][
                     min(max_count_segments_idx, i + 1)
@@ -1159,7 +1159,7 @@ def accelerate_segments(
                         f"Base acc: {acc_percentage}, "
                         f"smoth acc: {duration_tts / smoth_duration}"
                     )
-                    acc_percentage = max(1.2, (duration_tts / smoth_duration))
+                    acc_percentage = max(1.15, (duration_tts / smoth_duration))
 
             except Exception as error:
                 logger.error(str(error))
@@ -1183,13 +1183,23 @@ def accelerate_segments(
         else:
             info_enc = "OGG"
 
-        # Apply aceleration or opposite to the audio file in folder_output folder
+        # Apply acceleration or opposite to the audio file in folder_output folder
+        out_target = f"{folder_output}/{filename}"
         if acc_percentage == 1.0 and info_enc == "OGG":
             copy_files(filename, f"{folder_output}{os.sep}audio")
         else:
-            os.system(
-                f"ffmpeg -y -loglevel panic -i {filename} -filter:a atempo={acc_percentage} {folder_output}/{filename}"
+            # Algorithme prédictif haute fidélité : RubberBand avec préservation des formants
+            # Si le filtre rubberband n'est pas lié à ffmpeg, repli transparent immédiat sur atempo
+            cmd_rb = (
+                f"ffmpeg -y -loglevel panic -i {filename} "
+                f"-filter:a \"rubberband=tempo={acc_percentage}:formant=preserved\" "
+                f"{out_target}"
             )
+            ret = os.system(cmd_rb)
+            if ret != 0 or not os.path.exists(out_target) or os.path.getsize(out_target) == 0:
+                os.system(
+                    f"ffmpeg -y -loglevel panic -i {filename} -filter:a atempo={acc_percentage} {out_target}"
+                )
 
         if logger.isEnabledFor(logging.DEBUG):
             try:

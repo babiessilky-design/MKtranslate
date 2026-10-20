@@ -1,0 +1,1 @@
+Bonjour, je valide cet échantillon sonore comme modèle vocal de référence pour la synthèse vocale.

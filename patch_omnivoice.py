@@ -158,14 +158,20 @@ def patch():
                     if "OMNIVOICE_GUIDANCE_SCALE\", 2.6)" in omni_code:
                         omni_code = omni_code.replace("OMNIVOICE_GUIDANCE_SCALE\", 2.6)", "OMNIVOICE_GUIDANCE_SCALE\", 1.9)")
                         changed = True
+                    if "num_step = int(kwargs.get(\"num_step\", 32))" in omni_code:
+                        omni_code = omni_code.replace(
+                            "num_step = int(kwargs.get(\"num_step\", 32))",
+                            "num_step = int(kwargs.get(\"num_step\", os.getenv(\"OMNIVOICE_NUM_STEP\", 48)))"
+                        )
+                        changed = True
                     if changed:
                         with open(fpath, "w", encoding="utf-8") as f_omni:
                             f_omni.write(omni_code)
-                        print(f"[MKtranslate Patch] {fpath} patché pour OmniVoice !")
+                        print(f"[MKtranslate Patch] {fpath} patché pour OmniVoice (48 steps / guidance 1.9) !")
                 except Exception:
                     pass
 
-    # 11. Correction du bug de répétition Chatterbox (Bug #549)
+    # 11. Correction du bug de répétition Chatterbox (Bug #549) et suppression du tatouage Perth
     for root, dirs, files in os.walk(base_dir):
         for fname in files:
             if fname == "alignment_stream_analyzer.py":
@@ -183,16 +189,25 @@ def patch():
                         print(f"[MKtranslate Patch] {fpath} patché contre le bug de répétition Chatterbox !")
                 except Exception:
                     pass
-            elif fname == "mtl_tts.py":
+            elif fname in ["mtl_tts.py", "tts.py", "tts_turbo.py", "vc.py"]:
                 fpath = os.path.join(root, fname)
                 try:
                     with open(fpath, "r", encoding="utf-8", errors="ignore") as f_mtl:
                         mtl_code = f_mtl.read()
+                    changed_mtl = False
                     if "temperature=0.8," in mtl_code:
                         mtl_code = mtl_code.replace("temperature=0.8,", "temperature=0.35,")
+                        changed_mtl = True
+                    if "self.watermarker.apply_watermark(wav" in mtl_code:
+                        mtl_code = mtl_code.replace(
+                            "watermarked_wav = self.watermarker.apply_watermark(wav, sample_rate=self.sr)",
+                            "watermarked_wav = wav"
+                        )
+                        changed_mtl = True
+                    if changed_mtl:
                         with open(fpath, "w", encoding="utf-8") as f_mtl:
                             f_mtl.write(mtl_code)
-                        print(f"[MKtranslate Patch] {fpath} patché avec temperature=0.35 anti-hallucination !")
+                        print(f"[MKtranslate Patch] {fpath} patché (pureté audio sans watermark / temperature=0.35) !")
                 except Exception:
                     pass
 
