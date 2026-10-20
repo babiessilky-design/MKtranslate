@@ -178,15 +178,15 @@ class OmniVoiceProvider(BaseTTSProvider):
             torch.cuda.manual_seed_all(seed)
         np.random.seed(seed)
 
-        # Configuration optimisée pour fidélité maximale de clonage et élimination des hallucinations
-        # guidance_scale: 1.9 est la valeur idéale recommandée par k2-fsa (évite la sur-saturation métallique)
-        guidance_scale = float(kwargs.get("guidance_scale", os.getenv("OMNIVOICE_GUIDANCE_SCALE", 1.9)))
+        # Configuration optimisée pour fidélité maximale de clonage
+        # guidance_scale: plus élevé (2.6) = adhésion acoustique stricte à la voix de référence
+        guidance_scale = float(kwargs.get("guidance_scale", os.getenv("OMNIVOICE_GUIDANCE_SCALE", 2.6)))
         
-        # position_temperature: 0.0 pour un échantillonnage déterministe et stable
+        # position_temperature: 0.0 supprime tout bruit Gumbel aléatoire qui altère le timbre masculin
         position_temperature = float(kwargs.get("position_temperature", os.getenv("OMNIVOICE_POS_TEMP", 0.0)))
         
-        # num_step: 48 étapes pour une fidélité acoustique supérieure, grain soyeux et élimination des artefacts de diffusion
-        num_step = int(kwargs.get("num_step", os.getenv("OMNIVOICE_NUM_STEP", 48)))
+        # num_step: 32 étapes pour une synthèse propre et nette
+        num_step = int(kwargs.get("num_step", os.getenv("OMNIVOICE_NUM_STEP", 32)))
 
         clean_text = text.strip()
         sample_rate = getattr(model, "sampling_rate", 24000) or 24000
@@ -209,7 +209,7 @@ class OmniVoiceProvider(BaseTTSProvider):
             class_temperature=0.0,  # Échantillonnage déterministe
             denoise=True,
             preprocess_prompt=True,
-            postprocess_output=False,  # Désactivé : évite que remove_silence ne vide les segments courts !
+            postprocess_output=True,
         )
 
         speed = float(kwargs.get("speed", 1.0))
@@ -238,16 +238,10 @@ class OmniVoiceProvider(BaseTTSProvider):
             self.logger.warning(f"OmniVoice a produit un segment vide pour '{clean_text[:30]}'. Utilisation d'un silence de secours.")
             wav_out = np.zeros(int(sample_rate * 0.4), dtype=np.float32)
         else:
-            # Normalisation studio broadcast (-1.0 dBFS, amplitude crête 0.89)
+            # Normalisation anti-clipping sécurisée
             max_val = float(np.abs(wav_out).max())
-            if max_val > 0.01:
-                wav_out = (wav_out / max_val) * 0.89
-
-            # Fondu sortant doux de 50ms pour éliminer tout souffle résiduel ou clic
-            fade_len = int(sample_rate * 0.05)
-            if fade_len > 0 and len(wav_out) >= fade_len:
-                fade_curve = np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
-                wav_out[-fade_len:] *= fade_curve
+            if max_val > 1.0:
+                wav_out = wav_out / max_val * 0.98
 
         os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
         try:
