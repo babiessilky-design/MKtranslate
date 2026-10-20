@@ -290,7 +290,7 @@ class ChatterboxMultilingualTTS:
         audio_prompt_path=None,
         exaggeration=0.5,
         cfg_weight=0.5,
-        temperature=0.35,
+        temperature=0.8,
         repetition_penalty=1.4,
         min_p=0.05,
         top_p=1.0,
@@ -356,6 +356,5 @@ class ChatterboxMultilingualTTS:
                 ref_dict=self.conds.gen,
             )
             wav = wav.squeeze(0).detach().cpu().numpy()
-            ## Pureté studio maximale (sans distorsion filigrane Perth)
-            watermarked_wav = wav
+            watermarked_wav = self.watermarker.apply_watermark(wav, sample_rate=self.sr)
         return torch.from_numpy(watermarked_wav).unsqueeze(0)

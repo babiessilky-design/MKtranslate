@@ -146,8 +146,8 @@ class ChatterBoxProvider(BaseTTSProvider):
         if clean_text[-1] not in ('.', '!', '?', ':', ';', '…'):
             clean_text += '.'
 
-        # Paramètres d'expressivité et stabilité anti-hallucinations (température 0.35)
-        temperature = float(kwargs.get("temperature", os.getenv("CHATTERBOX_TEMPERATURE", 0.35)))
+        # Paramètres d'expressivité et température naturelle (0.8 par défaut)
+        temperature = float(kwargs.get("temperature", os.getenv("CHATTERBOX_TEMPERATURE", 0.8)))
         exaggeration = float(kwargs.get("exaggeration", 0.5))
         cfg_weight = float(kwargs.get("cfg_weight", 0.5))
         
@@ -190,17 +190,8 @@ class ChatterBoxProvider(BaseTTSProvider):
         import numpy as np
         if wav_np.size > 0:
             max_val = float(np.abs(wav_np).max())
-            if max_val > 0.01:
-                wav_np = (wav_np / max_val) * 0.89
-
-            # Fondu sortant doux de 30ms anti-clic
-            fade_len = int(model.sr * 0.03)
-            if fade_len > 0 and len(wav_np) >= fade_len:
-                fade_curve = np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
-                if wav_np.ndim == 1:
-                    wav_np[-fade_len:] *= fade_curve
-                elif wav_np.ndim == 2:
-                    wav_np[-fade_len:, :] *= fade_curve[:, None]
+            if max_val > 1.0:
+                wav_np = wav_np / max_val * 0.98
 
         os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
         try:
