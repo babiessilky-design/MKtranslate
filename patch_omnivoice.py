@@ -24,6 +24,11 @@ def patch():
     # 0. S'assurer que 'import re' est bien présent
     if "\nimport re\n" not in content and "import re" not in content[:500]:
         content = content.replace("import sys\n", "import sys\nimport re\n")
+    if "def sanitize_tts_text(t):\n        if not t:\n            return \"\"\n        import re" not in content:
+        content = content.replace(
+            "def sanitize_tts_text(t):\n        if not t:\n            return \"\"\n",
+            "def sanitize_tts_text(t):\n        if not t:\n            return \"\"\n        import re\n"
+        )
 
     # 1. Définition et injection de is_custom_ai_voice
     custom_func_code = '''    def is_custom_ai_voice(v):
