@@ -966,6 +966,7 @@ class SoniTranslate(SoniTrCache):
         # ======================================================================
         os.environ["GEMINI_TTS_MODEL"] = gemini_tts_model
         os.environ["CUSTOM_CLONING_ENGINE"] = custom_cloning_engine
+        os.environ["MAX_SPEAKERS"] = str(max_speakers)
         # ======================================================================
         # SYNCHRONISATION AUTOMATIQUE : MIN_SPEAKERS SUIT MAX_SPEAKERS
         # Quand l'utilisateur choisit 2 locuteurs, PyAnote est OBLIGÉ d'en trouver 2
@@ -1262,6 +1263,7 @@ class SoniTranslate(SoniTrCache):
                         SOURCE_LANGUAGE,
                         literalize_numbers,
                         segment_duration_limit,
+                        max_speakers=max_speakers,
                     )
                 logger.debug(
                     "Transcript complete, "
@@ -1322,7 +1324,7 @@ class SoniTranslate(SoniTrCache):
 
             if transcriber_model == "Gemini 3.5 Transcribe":
                 prog_disp("Diarization complete (Gemini Native)", 0.60, is_gui, progress=progress)
-                self.result_diarize = reencode_speakers(copy.deepcopy(self.result))
+                self.result_diarize = reencode_speakers(copy.deepcopy(self.result), max_speakers=max_speakers)
                 logger.info("Diarisation Pyannote court-circuitée : locuteurs déjà assignés nativement par Gemini.")
             else:
                 if not self.task_in_cache("diarize", [

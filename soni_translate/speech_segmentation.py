@@ -131,7 +131,7 @@ def openai_api_whisper(
     return audio, result
 
 
-def parse_gemini_transcription(text_resp, default_lang="en", audio_duration=None):
+def parse_gemini_transcription(text_resp, default_lang="en", audio_duration=None, max_speakers=None):
     """
     Parse la sortie textuelle de Gemini (JSON, markdown, ou format horodaté)
     et extrait les segments avec 'start', 'end', 'text', 'speaker' (SPEAKER_00, SPEAKER_01...).
@@ -139,6 +139,17 @@ def parse_gemini_transcription(text_resp, default_lang="en", audio_duration=None
     text_resp = (text_resp or "").strip()
     if not text_resp:
         return [], default_lang
+
+    if max_speakers is None:
+        try:
+            max_spk_val = int(os.environ.get("MAX_SPEAKERS", 0))
+        except (ValueError, TypeError):
+            max_spk_val = 0
+    else:
+        try:
+            max_spk_val = int(max_speakers)
+        except (ValueError, TypeError):
+            max_spk_val = 0
 
     # 1. Tentatives d'extraction et de parsing JSON
     json_candidates = []
@@ -196,7 +207,10 @@ def parse_gemini_transcription(text_resp, default_lang="en", audio_duration=None
                     end_val = start_val + 0.5
                 spk_raw = seg.get("speaker", "SPEAKER_00")
                 spk_nums = re.findall(r'\d+', str(spk_raw))
-                spk = f"SPEAKER_{int(spk_nums[0]):02d}" if spk_nums else "SPEAKER_00"
+                spk_id = int(spk_nums[0]) if spk_nums else 0
+                if max_spk_val > 0 and spk_id >= max_spk_val:
+                    spk_id = max_spk_val - 1
+                spk = f"SPEAKER_{spk_id:02d}"
 
                 text_val = str(seg["text"]).strip()
                 if text_val:
@@ -236,7 +250,10 @@ def parse_gemini_transcription(text_resp, default_lang="en", audio_duration=None
                     t_start = parse_time(m.group(1))
                     t_end = parse_time(m.group(2))
                     spk_idx = m.group(3)
-                    spk = f"SPEAKER_{int(spk_idx):02d}" if spk_idx else "SPEAKER_00"
+                    spk_id = int(spk_idx) if spk_idx else 0
+                    if max_spk_val > 0 and spk_id >= max_spk_val:
+                        spk_id = max_spk_val - 1
+                    spk = f"SPEAKER_{spk_id:02d}"
                     txt = m.group(4).strip()
                     if t_end <= t_start:
                         t_end = t_start + 0.5
@@ -273,7 +290,8 @@ def parse_gemini_transcription(text_resp, default_lang="en", audio_duration=None
 def gemini_api_transcribe(
     input_audio_file,
     source_lang=None,
-    model_name="gemini-3.5-transcribe"
+    model_name="gemini-3.5-transcribe",
+    max_speakers=None,
 ):
     """
     Transcrit l'audio et effectue la diarisation nativement avec Google Gemini.
@@ -343,12 +361,38 @@ def gemini_api_transcribe(
             else "Detect the primary spoken language and set 'language' to its ISO-639-1 code."
         )
 
+        max_spk = None
+        if max_speakers is not None:
+            try:
+                max_spk = int(max_speakers)
+            except (ValueError, TypeError):
+                max_spk = None
+        if max_spk is None:
+            try:
+                env_spk = os.environ.get("MAX_SPEAKERS")
+                if env_spk:
+                    max_spk = int(env_spk)
+            except (ValueError, TypeError):
+                max_spk = None
+
+        if max_spk and max_spk > 0:
+            if max_spk == 1:
+                rule_speakers = "1. There is at most 1 speaker in this audio. Label all speech strictly as SPEAKER_00."
+            else:
+                last_spk = f"SPEAKER_{max_spk - 1:02d}"
+                rule_speakers = (
+                    f"1. There are at most {max_spk} speakers in this audio. "
+                    f"Label them strictly among SPEAKER_00 to {last_spk}."
+                )
+        else:
+            rule_speakers = "1. Identify all distinct speakers and label them strictly as SPEAKER_00, SPEAKER_01, SPEAKER_02, etc. (0-indexed)."
+
         prompt = f"""You are an expert speech recognition and speaker diarization engine.
 Transcribe the provided audio accurately.
 {lang_instruction}
 
 CRITICAL RULES:
-1. Identify all distinct speakers and label them strictly as SPEAKER_00, SPEAKER_01, SPEAKER_02, etc. (0-indexed).
+{rule_speakers}
 2. Segment speech into natural, coherent sentences or dialogue phrases (ideal for subtitles and video dubbing).
 3. For each segment, output:
    - "start": start time in seconds (float, e.g. 1.25)
@@ -441,7 +485,8 @@ CRITICAL RULES:
         formatted_segments, detected_lang = parse_gemini_transcription(
             response_text,
             default_lang=source_lang or "en",
-            audio_duration=audio_duration
+            audio_duration=audio_duration,
+            max_speakers=max_spk,
         )
 
         if not formatted_segments:
@@ -484,6 +529,7 @@ def transcribe_speech(
     SOURCE_LANGUAGE,
     literalize_numbers=True,
     segment_duration_limit=15,
+    max_speakers=None,
 ):
     """
     Transcribe speech using a whisper model.
@@ -502,7 +548,7 @@ def transcribe_speech(
     """
 
     if asr_model == "Gemini 3.5 Transcribe":
-        return gemini_api_transcribe(audio_wav, SOURCE_LANGUAGE)
+        return gemini_api_transcribe(audio_wav, SOURCE_LANGUAGE, max_speakers=max_speakers)
 
     if asr_model == "OpenAI_API_Whisper":
         if literalize_numbers:
@@ -665,7 +711,18 @@ diarization_models = {
 }
 
 
-def reencode_speakers(result):
+def reencode_speakers(result, max_speakers=None):
+    if max_speakers is None:
+        try:
+            max_spk_val = int(os.environ.get("MAX_SPEAKERS", 0))
+        except (ValueError, TypeError):
+            max_spk_val = 0
+    else:
+        try:
+            max_spk_val = int(max_speakers)
+        except (ValueError, TypeError):
+            max_spk_val = 0
+
     speaker_mapping = {}
     counter = 0
     
@@ -677,8 +734,11 @@ def reencode_speakers(result):
         old_speaker = segment.get("speaker", "SPEAKER_00")
         
         if old_speaker not in speaker_mapping:
-            speaker_mapping[old_speaker] = f"SPEAKER_{counter:02d}"
-            counter += 1
+            if max_spk_val > 0 and counter >= max_spk_val:
+                speaker_mapping[old_speaker] = f"SPEAKER_{max_spk_val - 1:02d}"
+            else:
+                speaker_mapping[old_speaker] = f"SPEAKER_{counter:02d}"
+                counter += 1
             
         segment["speaker"] = speaker_mapping[old_speaker]
 

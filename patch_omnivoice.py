@@ -89,12 +89,30 @@ def patch():
             '# SYNCHRONISATION AUTOMATIQUE : MIN_SPEAKERS SUIT MAX_SPEAKERS\n        if max_speakers > 1:\n            min_speakers = max_speakers\n            logger.info(f"Auto-Sync Speakers: min_speakers set to {min_speakers} (matching max_speakers={max_speakers})")\n        else:\n            min_speakers = 1\n\n        if not YOUR_HF_TOKEN:'
         )
 
+    if 'os.environ["MAX_SPEAKERS"] = str(max_speakers)' not in content:
+        content = content.replace(
+            'os.environ["CUSTOM_CLONING_ENGINE"] = custom_cloning_engine',
+            'os.environ["CUSTOM_CLONING_ENGINE"] = custom_cloning_engine\n        os.environ["MAX_SPEAKERS"] = str(max_speakers)'
+        )
+
+    if 'max_speakers=max_speakers,' not in content:
+        content = content.replace(
+            'segment_duration_limit,\n                    )',
+            'segment_duration_limit,\n                        max_speakers=max_speakers,\n                    )'
+        )
+
+    if 'reencode_speakers(copy.deepcopy(self.result), max_speakers=max_speakers)' not in content:
+        content = content.replace(
+            'self.result_diarize = reencode_speakers(copy.deepcopy(self.result))',
+            'self.result_diarize = reencode_speakers(copy.deepcopy(self.result), max_speakers=max_speakers)'
+        )
+
     with open(target_file, "w", encoding="utf-8") as f:
         f.write(content)
 
     print(f"[MKtranslate Patch] {target_file} patché avec succès pour OmniVoice & MKtranslate !")
 
-    # 8. Copie de cosy.wav dans voice_library si nécessaire
+    # 9. Copie de cosy.wav dans voice_library si nécessaire
     base_dir = os.path.dirname(target_file)
     for vdir_name in ["voice_library", os.path.join("soni_translate", "voice_library")]:
         vdir = os.path.join(base_dir, vdir_name)
@@ -108,7 +126,7 @@ def patch():
                 except Exception as e:
                     print(f"[MKtranslate Patch] Erreur copie cosy.wav: {e}")
 
-    # 9. Correction du bug zero-size array dans omnivoice
+    # 10. Correction du bug zero-size array dans omnivoice
     for root, dirs, files in os.walk(base_dir):
         for fname in files:
             if fname.endswith("omnivoice.py"):
