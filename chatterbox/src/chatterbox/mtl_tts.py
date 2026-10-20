@@ -290,10 +290,11 @@ class ChatterboxMultilingualTTS:
         audio_prompt_path=None,
         exaggeration=0.5,
         cfg_weight=0.5,
-        temperature=0.8,
-        repetition_penalty=2.0,
+        temperature=0.35,
+        repetition_penalty=1.4,
         min_p=0.05,
         top_p=1.0,
+        max_new_tokens=None,
     ):
         # Validate language_id
         if language_id and language_id.lower() not in SUPPORTED_LANGUAGES:
@@ -327,11 +328,16 @@ class ChatterboxMultilingualTTS:
         text_tokens = F.pad(text_tokens, (1, 0), value=sot)
         text_tokens = F.pad(text_tokens, (0, 1), value=eot)
 
+        # Anti-Hallucination Guard : calcul dynamique du plafond de tokens
+        if max_new_tokens is None:
+            num_words = max(1, len(text.split()))
+            max_new_tokens = min(600, max(50, int(num_words * 18) + 60))
+
         with torch.inference_mode():
             speech_tokens = self.t3.inference(
                 t3_cond=self.conds.t3,
                 text_tokens=text_tokens,
-                max_new_tokens=1000,  # TODO: use the value in config
+                max_new_tokens=max_new_tokens,
                 temperature=temperature,
                 cfg_weight=cfg_weight,
                 repetition_penalty=repetition_penalty,

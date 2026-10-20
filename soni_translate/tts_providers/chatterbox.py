@@ -134,9 +134,32 @@ class ChatterBoxProvider(BaseTTSProvider):
             
         lang_id = self.get_language_id(target_lang)
         
-        # Paramètres d'expressivité (recommandés par Resemble AI)
-        exaggeration = kwargs.get("exaggeration", 0.5)
-        cfg_weight = kwargs.get("cfg_weight", 0.5)
+        # Sanitisation anti-hallucination : ponctuation terminale obligatoire et nettoyage
+        clean_text = text.strip()
+        if not clean_text or not any(c.isalnum() for c in clean_text):
+            os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
+            import numpy as np
+            silence_arr = np.zeros(int(model.sr * 0.4), dtype=np.float32)
+            sf.write(output_file, silence_arr, model.sr)
+            return
+
+        if clean_text[-1] not in ('.', '!', '?', ':', ';', '…'):
+            clean_text += '.'
+
+        # Paramètres d'expressivité et stabilité anti-hallucinations (température 0.35)
+        temperature = float(kwargs.get("temperature", os.getenv("CHATTERBOX_TEMPERATURE", 0.35)))
+        exaggeration = float(kwargs.get("exaggeration", 0.5))
+        cfg_weight = float(kwargs.get("cfg_weight", 0.5))
+        
+        # Calcul dynamique du plafond max_new_tokens (Anti-Hallucination Guard)
+        num_words = max(1, len(clean_text.split()))
+        seg_duration = kwargs.get("seg_duration")
+        if seg_duration and float(seg_duration) > 0:
+            max_from_dur = int(float(seg_duration) * 55) + 30
+            max_from_words = int(num_words * 20) + 50
+            max_new_tokens = min(600, max(50, min(max_from_dur, max_from_words)))
+        else:
+            max_new_tokens = min(600, max(50, int(num_words * 18) + 60))
         
         # --- SÉCURITÉ DE TRANSFERT D'ACCENT ---
         # Si on fait du cross-lingual (voix fr parlant anglais), on met cfg_weight à 0.0
@@ -148,11 +171,13 @@ class ChatterBoxProvider(BaseTTSProvider):
             
         # Génération directe via Chatterbox (renvoie un tenseur PyTorch)
         wav_tensor = model.generate(
-            text,
+            clean_text,
             language_id=lang_id,
             audio_prompt_path=ref_audio,
             exaggeration=exaggeration,
-            cfg_weight=cfg_weight
+            cfg_weight=cfg_weight,
+            temperature=temperature,
+            max_new_tokens=max_new_tokens,
         )
         
         # Enregistrement natif à 24000Hz avec soundfile
@@ -161,6 +186,12 @@ class ChatterBoxProvider(BaseTTSProvider):
             wav_np = wav_tensor.transpose(0, 1).numpy()
         else:
             wav_np = wav_tensor.numpy()
+
+        import numpy as np
+        if wav_np.size > 0:
+            max_val = float(np.abs(wav_np).max())
+            if max_val > 1.0:
+                wav_np = wav_np / max_val * 0.98
 
         os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
         try:

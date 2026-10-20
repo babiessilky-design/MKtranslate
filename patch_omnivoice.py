@@ -112,8 +112,9 @@ def patch():
 
     print(f"[MKtranslate Patch] {target_file} patché avec succès pour OmniVoice & MKtranslate !")
 
-    # 9. Copie de cosy.wav dans voice_library si nécessaire
+    # 9. Copie de cosy.wav et cosy.txt dans voice_library si nécessaire
     base_dir = os.path.dirname(target_file)
+    cosy_text_content = "It is during our darkest moments that we must focus to see the light."
     for vdir_name in ["voice_library", os.path.join("soni_translate", "voice_library")]:
         vdir = os.path.join(base_dir, vdir_name)
         if os.path.exists(vdir):
@@ -125,8 +126,18 @@ def patch():
                     print(f"[MKtranslate Patch] cosy.wav créé à partir de f5-tts_cosy.wav dans {vdir}")
                 except Exception as e:
                     print(f"[MKtranslate Patch] Erreur copie cosy.wav: {e}")
+            
+            for c_txt in ["cosy.txt", "f5-tts_cosy.txt"]:
+                c_path = os.path.join(vdir, c_txt)
+                if not os.path.exists(c_path):
+                    try:
+                        with open(c_path, "w", encoding="utf-8") as f_ctxt:
+                            f_ctxt.write(cosy_text_content)
+                        print(f"[MKtranslate Patch] {c_txt} créé dans {vdir}")
+                    except Exception as e_txt:
+                        print(f"[MKtranslate Patch] Erreur création {c_txt}: {e_txt}")
 
-    # 10. Correction du bug zero-size array dans omnivoice
+    # 10. Correction du bug zero-size array et anti-hallucination dans omnivoice
     for root, dirs, files in os.walk(base_dir):
         for fname in files:
             if fname.endswith("omnivoice.py"):
@@ -144,10 +155,44 @@ def patch():
                     if "postprocess_output=True" in omni_code:
                         omni_code = omni_code.replace("postprocess_output=True", "postprocess_output=False")
                         changed = True
+                    if "OMNIVOICE_GUIDANCE_SCALE\", 2.6)" in omni_code:
+                        omni_code = omni_code.replace("OMNIVOICE_GUIDANCE_SCALE\", 2.6)", "OMNIVOICE_GUIDANCE_SCALE\", 1.9)")
+                        changed = True
                     if changed:
                         with open(fpath, "w", encoding="utf-8") as f_omni:
                             f_omni.write(omni_code)
-                        print(f"[MKtranslate Patch] {fpath} patché contre le bug zero-size array !")
+                        print(f"[MKtranslate Patch] {fpath} patché pour OmniVoice !")
+                except Exception:
+                    pass
+
+    # 11. Correction du bug de répétition Chatterbox (Bug #549)
+    for root, dirs, files in os.walk(base_dir):
+        for fname in files:
+            if fname == "alignment_stream_analyzer.py":
+                fpath = os.path.join(root, fname)
+                try:
+                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f_asa:
+                        asa_code = f_asa.read()
+                    if "len(set(self.generated_tokens[-2:])) == 1" in asa_code:
+                        asa_code = asa_code.replace(
+                            "len(set(self.generated_tokens[-2:])) == 1",
+                            "len(self.generated_tokens) >= 4 and len(set(self.generated_tokens[-4:])) == 1"
+                        )
+                        with open(fpath, "w", encoding="utf-8") as f_asa:
+                            f_asa.write(asa_code)
+                        print(f"[MKtranslate Patch] {fpath} patché contre le bug de répétition Chatterbox !")
+                except Exception:
+                    pass
+            elif fname == "mtl_tts.py":
+                fpath = os.path.join(root, fname)
+                try:
+                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f_mtl:
+                        mtl_code = f_mtl.read()
+                    if "temperature=0.8," in mtl_code:
+                        mtl_code = mtl_code.replace("temperature=0.8,", "temperature=0.35,")
+                        with open(fpath, "w", encoding="utf-8") as f_mtl:
+                            f_mtl.write(mtl_code)
+                        print(f"[MKtranslate Patch] {fpath} patché avec temperature=0.35 anti-hallucination !")
                 except Exception:
                     pass
 

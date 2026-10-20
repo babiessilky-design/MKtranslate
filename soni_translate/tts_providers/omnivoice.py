@@ -178,11 +178,11 @@ class OmniVoiceProvider(BaseTTSProvider):
             torch.cuda.manual_seed_all(seed)
         np.random.seed(seed)
 
-        # Configuration optimisée pour fidélité maximale de clonage
-        # guidance_scale: plus élevé (2.6) = adhésion acoustique stricte à la voix de référence
-        guidance_scale = float(kwargs.get("guidance_scale", os.getenv("OMNIVOICE_GUIDANCE_SCALE", 2.6)))
+        # Configuration optimisée pour fidélité maximale de clonage et élimination des hallucinations
+        # guidance_scale: 1.9 est la valeur idéale recommandée par k2-fsa (évite la sur-saturation métallique)
+        guidance_scale = float(kwargs.get("guidance_scale", os.getenv("OMNIVOICE_GUIDANCE_SCALE", 1.9)))
         
-        # position_temperature: 0.0 supprime tout bruit Gumbel aléatoire qui altère le timbre masculin
+        # position_temperature: 0.0 pour un échantillonnage déterministe et stable
         position_temperature = float(kwargs.get("position_temperature", os.getenv("OMNIVOICE_POS_TEMP", 0.0)))
         
         # num_step: 32 étapes pour une synthèse propre et nette
@@ -198,6 +198,10 @@ class OmniVoiceProvider(BaseTTSProvider):
             sf.write(output_file, silence_arr, sample_rate)
             return
 
+        # Ponctuation terminale forcée pour stabiliser le masque de fin
+        if clean_text[-1] not in ('.', '!', '?', ':', ';', '…'):
+            clean_text += '.'
+
         gen_config = OmniVoiceGenerationConfig(
             num_step=num_step,
             guidance_scale=guidance_scale,
@@ -210,13 +214,21 @@ class OmniVoiceProvider(BaseTTSProvider):
 
         speed = float(kwargs.get("speed", 1.0))
 
-        # Synthèse vocale avec conditionnement exact du profil vocal et de la langue
+        # Plafond de durée anti-débordement basé sur le segment vidéo original
+        target_duration = None
+        seg_duration = kwargs.get("seg_duration")
+        if seg_duration and float(seg_duration) > 0:
+            target_duration = min(float(seg_duration) * 1.25 + 0.5, 30.0)
+
+        # Synthèse vocale avec conditionnement exact du profil vocal, durée bornée et normalisation
         wav = model.generate(
             text=clean_text,
             language=lang_id,
             voice_clone_prompt=prompt,
             generation_config=gen_config,
-            speed=speed
+            speed=speed,
+            duration=target_duration,
+            normalize_text=True,
         )
         
         wav_out = wav[0] if (wav is not None and len(wav) > 0) else np.array([], dtype=np.float32)
@@ -230,6 +242,12 @@ class OmniVoiceProvider(BaseTTSProvider):
             max_val = float(np.abs(wav_out).max())
             if max_val > 1.0:
                 wav_out = wav_out / max_val * 0.98
+
+            # Fondu sortant doux de 50ms pour éliminer tout souffle résiduel ou clic
+            fade_len = int(sample_rate * 0.05)
+            if fade_len > 0 and len(wav_out) >= fade_len:
+                fade_curve = np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
+                wav_out[-fade_len:] *= fade_curve
 
         os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
         try:

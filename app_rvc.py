@@ -306,6 +306,28 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
             v_low.startswith("omnivoice/")
         )
 
+    def sanitize_tts_text(t):
+        if not t:
+            return ""
+        # 1. Supprimer les indications de sous-titres / bruitages entre crochets, parenthèses ou astérisques
+        t = re.sub(r'\[.*?\]', ' ', t)
+        t = re.sub(r'\(.*?\)', ' ', t)
+        t = re.sub(r'\*.*?\*', ' ', t)
+        # 2. Supprimer les guillemets et symboles parasites qui désalignent le tokenizer
+        for q in ['"', '“', '”', '«', '»', '`']:
+            t = t.replace(q, ' ')
+        # 3. Supprimer les tirets / puces orphelines en début de ligne
+        t = re.sub(r'^\s*[-–—•~]+\s*', '', t)
+        # 4. Normaliser les espaces multiples
+        t = re.sub(r'\s+', ' ', t).strip()
+        # Si le texte ne contient aucun caractère alphanumérique, renvoyer vide
+        if not any(c.isalnum() for c in t):
+            return ""
+        # 5. Forcer la ponctuation finale (indispensable pour stopper les modèles autorégressifs)
+        if t and t[-1] not in ('.', '!', '?', ':', ';', '…'):
+            t += '.'
+        return t
+
     # On regarde si au moins une voix "externe/custom" est demandée
     has_custom_tts = any(is_custom_ai_voice(v) for v in tts_voices)
     
@@ -345,9 +367,19 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
         if not is_custom_ai_voice(voice):
             continue
             
-        text = segment["text"].strip()
+        raw_text = segment.get("text", "").strip()
+        text = sanitize_tts_text(raw_text)
         start = segment["start"]
+        end = segment.get("end", start + 2.0)
+        seg_duration = max(0.4, float(end) - float(start))
         output_file = f"audio/{start}.ogg"
+        
+        # Si le texte est vide ou purement composé de bruits / musique, générer directement un micro-silence propre
+        if not text:
+            os.makedirs(os.path.dirname(output_file), exist_ok=True)
+            silence_arr = np.zeros(int(seg_duration * 24000), dtype=np.float32)
+            sf.write(output_file, silence_arr, 24000)
+            continue
         
         # --- ÉTAPE A : VÉRIFICATION DU CACHE PERSISTANT (MD5 HASH) ---
         unique_string = f"{text}_{voice}_{TRANSLATE_AUDIO_TO}_speed1.0"
@@ -500,12 +532,12 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
                 elif cloning_engine == "ChatterBox Multilingual":
                     from soni_translate.tts_providers.chatterbox import ChatterBoxProvider
                     chatter_provider = ChatterBoxProvider()
-                    chatter_provider.generate(text=text, voice=voice, target_lang=TRANSLATE_AUDIO_TO, output_file=output_file)
+                    chatter_provider.generate(text=text, voice=voice, target_lang=TRANSLATE_AUDIO_TO, output_file=output_file, seg_duration=seg_duration)
                     generated_successfully = True
                 elif cloning_engine == "OmniVoice":
                     from soni_translate.tts_providers.omnivoice import OmniVoiceProvider
                     omni_provider = OmniVoiceProvider()
-                    omni_provider.generate(text=text, voice=voice, target_lang=TRANSLATE_AUDIO_TO, output_file=output_file, seed=42)
+                    omni_provider.generate(text=text, voice=voice, target_lang=TRANSLATE_AUDIO_TO, output_file=output_file, seed=42, seg_duration=seg_duration)
                     generated_successfully = True
             except Exception as e:
                 logger.error(f"Custom Cloning Error ({voice_name}) with {cloning_engine}: {str(e)}")
