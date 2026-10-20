@@ -210,6 +210,18 @@ def patch():
                         print(f"[MKtranslate Patch] {fpath} patché (pureté audio sans watermark / temperature=0.35) !")
                 except Exception:
                     pass
+            elif fname == "speech_segmentation.py":
+                fpath = os.path.join(root, fname)
+                try:
+                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f_ss:
+                        ss_code = f_ss.read()
+                    if '"gemini-2.0-flash"' in ss_code:
+                        ss_code = ss_code.replace('"gemini-2.0-flash"', '"gemini-3.8-flash"')
+                        with open(fpath, "w", encoding="utf-8") as f_ss:
+                            f_ss.write(ss_code)
+                        print(f"[MKtranslate Patch] {fpath} patché : gemini-2.0-flash banni au profit de gemini-3.8-flash !")
+                except Exception:
+                    pass
 
 if __name__ == "__main__":
     patch()
