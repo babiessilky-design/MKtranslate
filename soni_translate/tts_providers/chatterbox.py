@@ -211,4 +211,3 @@ class ChatterBoxProvider(BaseTTSProvider):
                         os.remove(wav_fallback)
                     except Exception:
                         pass
-
