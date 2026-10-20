@@ -607,18 +607,12 @@ class TTS_Info:
         list_custom_library = [
             "OmniVoice/ref_homme_fr",
             "OmniVoice/ref_femme_fr",
-            "OmniVoice/ref_homme_narration_fr",
-            "OmniVoice/ref_femme_naturelle_fr",
             "OmniVoice/cosy",
             "Custom/ref_homme_fr",
             "Custom/ref_femme_fr",
-            "Custom/ref_homme_narration_fr",
-            "Custom/ref_femme_naturelle_fr",
             "Custom/cosy",
             "ChatterBox/ref_homme_fr",
             "ChatterBox/ref_femme_fr",
-            "ChatterBox/ref_homme_narration_fr",
-            "ChatterBox/ref_femme_naturelle_fr",
             "ChatterBox/cosy",
         ]
         for vlib_dir in ["voice_library", os.path.join("soni_translate", "voice_library")]:
@@ -3557,33 +3551,24 @@ if __name__ == "__main__":
                 for file in os.listdir(vlib_dir):
                     if file.lower().endswith(('.wav', '.mp3', '.flac')):
                         clean_name = file.rsplit('.', 1)[0]
-                        for prefix in ["OmniVoice", "Custom", "ChatterBox"]:
-                            v_id = f"{prefix}/{clean_name}"
-                            if v_id not in list_custom_library:
-                                list_custom_library.append(v_id)
-                        if clean_name == "f5-tts_cosy":
-                            for prefix in ["OmniVoice", "Custom", "ChatterBox"]:
-                                v_id = f"{prefix}/cosy"
-                                if v_id not in list_custom_library:
-                                    list_custom_library.append(v_id)
+                        v_id = f"Custom/{clean_name}"
+                        v_omni = f"OmniVoice/{clean_name}"
+                        if v_id not in list_custom_library:
+                            list_custom_library.append(v_id)
+                        if v_omni not in list_custom_library:
+                            list_custom_library.append(v_omni)
         
         list_custom_voices = [
             # --- TES VOIX DE RÉFÉRENCE FORCEES EN DUR (SÉCURITÉ UI) ---
             "OmniVoice/cosy",
             "OmniVoice/ref_homme_fr",
             "OmniVoice/ref_femme_fr",
-            "OmniVoice/ref_homme_narration_fr",
-            "OmniVoice/ref_femme_naturelle_fr",
             "Custom/cosy",
             "Custom/ref_homme_fr",
             "Custom/ref_femme_fr",
-            "Custom/ref_homme_narration_fr",
-            "Custom/ref_femme_naturelle_fr",
             "ChatterBox/cosy",
             "ChatterBox/ref_homme_fr",
             "ChatterBox/ref_femme_fr",
-            "ChatterBox/ref_homme_narration_fr",
-            "ChatterBox/ref_femme_naturelle_fr",
             
             # --- KOKORO FRANÇAIS ---
             "Kokoro/ff_siwis",   # Seule voix française officielle (Femme)
