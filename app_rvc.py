@@ -317,42 +317,48 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
         if not t:
             return ""
         import re
-        # 1. Supprimer les indications de sous-titres / bruitages entre crochets, parenthèses ou astérisques
-        t = re.sub(r'\[.*?\]', ' ', t)
-        t = re.sub(r'\(.*?\)', ' ', t)
-        t = re.sub(r'\*.*?\*', ' ', t)
-        # 2. Supprimer les guillemets et symboles parasites qui désalignent le tokenizer
+        # 1. Ne supprimer que les bruitages / indications sceniques explicites
+        noise_pattern = r'\[\s*(?:musique|music|rires|laughter|applause|applaudissements|silence|inaudible|bruit|noise)\s*\]'
+        t = re.sub(noise_pattern, ' ', t, flags=re.IGNORECASE)
+        t = re.sub(r'\(\s*(?:musique|music|rires|laughter|applause|applaudissements|silence|inaudible|bruit|noise)\s*\)', ' ', t, flags=re.IGNORECASE)
+        t = re.sub(r'\*\s*(?:musique|music|rires|laughter|applause|applaudissements|silence|inaudible|bruit|noise)\s*\*', ' ', t, flags=re.IGNORECASE)
+        
+        # 2. Conserver les mots entre parentheses ou crochets en retirant uniquement les delimiteurs
+        for char in '[](){}*':
+            t = t.replace(char, ' ')
+            
+        # 3. Supprimer les guillemets et symboles parasites qui desalignent le tokenizer
         for q in ['"', '“', '”', '«', '»', '`']:
             t = t.replace(q, ' ')
-        # 3. Supprimer les tirets / puces orphelines en début de ligne
+        # 4. Supprimer les tirets / puces orphelines en debut de ligne
         t = re.sub(r'^\s*[-–—•~]+\s*', '', t)
-        # 4. Normaliser les espaces multiples
+        # 5. Normaliser les espaces multiples
         t = re.sub(r'\s+', ' ', t).strip()
-        # Si le texte ne contient aucun caractère alphanumérique, renvoyer vide
+        # Si le texte ne contient aucun caractere alphanumerique, renvoyer vide
         if not any(c.isalnum() for c in t):
             return ""
-        # 5. Forcer la ponctuation finale (indispensable pour stopper les modèles autorégressifs)
+        # 6. Forcer la ponctuation finale (indispensable pour stopper les modeles autoregressifs)
         if t and t[-1] not in ('.', '!', '?', ':', ';', '…'):
             t += '.'
         return t
 
-    # On regarde si au moins une voix "externe/custom" est demandée
+    # On regarde si au moins une voix "externe/custom" est demandee
     has_custom_tts = any(is_custom_ai_voice(v) for v in tts_voices)
     
     if not has_custom_tts:
-        # Fallback classique immédiat si aucune voix IA n'est demandée
+        # Fallback classique immediat si aucune voix IA n'est demandee
         return original_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_gui, *args, **kwargs)
     
     # --------------------------------------------------------------------------
-    # ÉTAPE 1 : ON LANCE D'ABORD LA GÉNÉRATION ORIGINALE EN UN SEUL BLOC
-    # Cela va vider le dossier 'audio' et générer proprement toutes les voix EdgeTTS de base.
+    # ETAPE 1 : ON LANCE D'ABORD LA GENERATION ORIGINALE EN UN SEUL BLOC
+    # Cela va vider le dossier 'audio' et generer proprement toutes les voix EdgeTTS de base.
     # --------------------------------------------------------------------------
     logger.info("Running baseline SoniTranslate TTS generation...")
     original_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_gui, *args, **kwargs)
     
     # --------------------------------------------------------------------------
-    # ÉTAPE 2 : NOTRE BOUCLE PASSE PAR-DESSUS ET ÉCRASE AVEC LES VOIX IA CUSTOM
-    # Comme on ne vide pas le dossier 'audio' ici, les voix de l'Étape 1 restent intactes !
+    # ETAPE 2 : NOTRE BOUCLE PASSE PAR-DESSUS ET ECRASE AVEC LES VOIX IA CUSTOM
+    # Comme on ne vide pas le dossier 'audio' ici, les voix de l'Etape 1 restent intactes !
     # --------------------------------------------------------------------------
     os.makedirs("audio", exist_ok=True)
     persistent_cache_dir = "persistent_cache"
@@ -365,13 +371,15 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
         speaker_idx = int(speaker[-2:]) if speaker.startswith("SPEAKER_") else 0
         if speaker_idx < len(tts_voices):
             speakers_edge[speaker] = tts_voices[speaker_idx]
+        elif len(tts_voices) > 0:
+            speakers_edge[speaker] = tts_voices[0]
 
     for segment in result_diarize["segments"]:
         speaker = segment.get("speaker", "SPEAKER_00")
         speaker_idx = int(speaker[-2:]) if speaker.startswith("SPEAKER_") else 0
-        voice = tts_voices[speaker_idx]
+        voice = tts_voices[speaker_idx] if speaker_idx < len(tts_voices) else (tts_voices[0] if len(tts_voices) > 0 else "")
         
-        # On ignore les voix qui ne sont pas des voix d'IA personnalisées (elles ont déjà été générées à l'Étape 1)
+        # On ignore les voix qui ne sont pas des voix d'IA personnalisees (elles ont deja ete generees a l'Etape 1)
         if not is_custom_ai_voice(voice):
             continue
             
@@ -382,22 +390,35 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
         seg_duration = max(0.4, float(end) - float(start))
         output_file = f"audio/{start}.ogg"
         
-        # Si le texte est vide ou purement composé de bruits / musique, générer directement un micro-silence propre
+        # Si le texte est vide ou purement compose de bruits / musique, generer directement un micro-silence propre
         if not text:
             os.makedirs(os.path.dirname(output_file), exist_ok=True)
-            silence_arr = np.zeros(int(seg_duration * 24000), dtype=np.float32)
-            sf.write(output_file, silence_arr, 24000)
+            silence_arr = np.zeros(int(seg_duration * 44100), dtype=np.float32)
+            sf.write(output_file, silence_arr, 44100)
             continue
         
-        # --- ÉTAPE A : VÉRIFICATION DU CACHE PERSISTANT (MD5 HASH) ---
+        # --- ETAPE A : VERIFICATION DU CACHE PERSISTANT (MD5 HASH) ---
         unique_string = f"{text}_{voice}_{TRANSLATE_AUDIO_TO}_speed1.0"
         segment_hash = hashlib.md5(unique_string.encode("utf-8")).hexdigest()
         cache_file_path = os.path.join(persistent_cache_dir, f"{segment_hash}.ogg")
         
         if os.path.exists(cache_file_path) and os.path.getsize(cache_file_path) > 100:
-            logger.info(f"Persistent Cache HIT (Segment {start}): Reusing generated audio...")
-            shutil.copy(cache_file_path, output_file)
-            continue
+            is_valid_cached = False
+            try:
+                chk_data, _ = sf.read(cache_file_path)
+                if np.max(np.abs(chk_data)) > 0.005:
+                    is_valid_cached = True
+            except Exception:
+                pass
+            if is_valid_cached:
+                logger.info(f"Persistent Cache HIT (Segment {start}): Reusing generated audio...")
+                shutil.copy(cache_file_path, output_file)
+                continue
+            else:
+                try:
+                    os.remove(cache_file_path)
+                except Exception:
+                    pass
         
         generated_successfully = False
         
@@ -552,8 +573,7 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
                 elif cloning_engine in ["Fish Audio S2-Pro (FP16)", "Fish Audio S2-Pro", "FishAudio", "Fish Audio"]:
                     from soni_translate.tts_providers.fish_audio import FishAudioProvider
                     fish_provider = FishAudioProvider()
-                    fish_provider.generate(text=text, voice=voice, target_lang=TRANSLATE_AUDIO_TO, output_file=output_file, seed=42, seg_duration=seg_duration)
-                    generated_successfully = True
+                    generated_successfully = bool(fish_provider.generate(text=text, voice=voice, target_lang=TRANSLATE_AUDIO_TO, output_file=output_file, seed=42, seg_duration=seg_duration))
             except Exception as e:
                 logger.error(f"Custom Cloning Error ({voice_name}) with {cloning_engine}: {str(e)}")
 
@@ -563,15 +583,21 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
             try:
                 os.makedirs(os.path.dirname(output_file), exist_ok=True)
                 seg_dur = max(0.5, float(segment.get("end", start + 1.0)) - float(start))
-                silence_arr = np.zeros(int(seg_dur * 24000), dtype=np.float32)
-                sf.write(output_file, silence_arr, 24000)
+                silence_arr = np.zeros(int(seg_dur * 44100), dtype=np.float32)
+                sf.write(output_file, silence_arr, 44100)
                 logger.warning(f"Audio de secours (silence de {seg_dur:.2f}s) créé pour {output_file}")
             except Exception as err_sil:
                 logger.error(f"Impossible de créer le silence de secours: {err_sil}")
             
         # --- ÉTAPE B : ENREGISTREMENT DANS LE CACHE PERSISTANT APRÈS GÉNÉRATION ---
-        if generated_successfully and os.path.exists(output_file):
-            shutil.copy(output_file, cache_file_path)
+        # On ne met en cache que si la génération a RÉELLEMENT produit de la voix non-silencieuse
+        if generated_successfully and os.path.exists(output_file) and os.path.getsize(output_file) > 1000:
+            try:
+                chk_data, _ = sf.read(output_file)
+                if np.max(np.abs(chk_data)) > 0.005:
+                    shutil.copy(output_file, cache_file_path)
+            except Exception:
+                pass
 
     # On retourne le tuple de 6 attendu (Edge, Bark, Vits, Coqui, Onnx, OpenAI)
     return (speakers_edge, {}, {}, {}, {}, {})

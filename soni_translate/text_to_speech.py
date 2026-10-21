@@ -1184,12 +1184,26 @@ def accelerate_segments(
             info_enc = "OGG"
 
         # Apply aceleration or opposite to the audio file in folder_output folder
+        target_path = f"{folder_output}/{filename}"
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
         if acc_percentage == 1.0 and info_enc == "OGG":
             copy_files(filename, f"{folder_output}{os.sep}audio")
         else:
+            tempo = float(acc_percentage)
+            tempo_filters = []
+            while tempo > 2.0:
+                tempo_filters.append("atempo=2.0")
+                tempo /= 2.0
+            while tempo < 0.5:
+                tempo_filters.append("atempo=0.5")
+                tempo /= 0.5
+            tempo_filters.append(f"atempo={tempo:.3f}")
+            filter_str = ",".join(tempo_filters)
             os.system(
-                f"ffmpeg -y -loglevel panic -i {filename} -filter:a atempo={acc_percentage} {folder_output}/{filename}"
+                f'ffmpeg -y -loglevel error -i {filename} -filter:a "{filter_str}" {target_path}'
             )
+            if not os.path.exists(target_path) or os.path.getsize(target_path) == 0:
+                copy_files(filename, target_path)
 
         if logger.isEnabledFor(logging.DEBUG):
             try:

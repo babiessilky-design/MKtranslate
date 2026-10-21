@@ -421,7 +421,7 @@ class FishAudioProvider(BaseTTSProvider):
                         prompt_text=ref_text or "Voix de reference.",
                         prompt_tokens=[prompt_tokens] if isinstance(prompt_tokens, torch.Tensor) else prompt_tokens,
                         num_samples=1,
-                        max_new_tokens=int(kwargs.get("max_new_tokens", 1024)),
+                        max_new_tokens=int(kwargs.get("max_new_tokens", 2048)),
                         top_p=float(kwargs.get("top_p", 0.7)),
                         top_k=int(kwargs.get("top_k", 30)),
                         temperature=float(kwargs.get("temperature", 0.7)),
@@ -446,7 +446,7 @@ class FishAudioProvider(BaseTTSProvider):
                         wav_out = wav_out / max_val * 0.98
                     os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
                     sf.write(output_file, wav_out, sample_rate)
-                    return
+                    return True
         except Exception as e_local:
             import traceback
             self.logger.error(f"Fish Audio Local FP16 Generation Error: {str(e_local)}\n{traceback.format_exc()}")
@@ -458,3 +458,4 @@ class FishAudioProvider(BaseTTSProvider):
         seg_duration = kwargs.get("seg_duration", 1.0) or 1.0
         silence_arr = np.zeros(int(sample_rate * float(seg_duration)), dtype=np.float32)
         sf.write(output_file, silence_arr, sample_rate)
+        return False
