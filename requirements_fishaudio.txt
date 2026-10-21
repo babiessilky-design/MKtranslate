@@ -10,3 +10,4 @@ loguru>=0.6.0
 pyrootutils>=1.0.4
 tiktoken>=0.8.0
 cachetools
+descript-audio-codec
