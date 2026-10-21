@@ -501,9 +501,111 @@ def load_codec_model(codec_checkpoint_path, device, precision=torch.bfloat16):
 
     Weight norm is folded in fp32 before the cast, which keeps FP16 exact enough.
     """
-    config_path = Path(__file__).parent.parent.parent / "configs" / "modded_dac_vq.yaml"
-    cfg = OmegaConf.load(str(config_path))
-    codec = instantiate(cfg)
+    config_candidates = [
+        Path(__file__).parent.parent.parent / "configs" / "modded_dac_vq.yaml",
+        Path(__file__).parent.parent / "configs" / "modded_dac_vq.yaml",
+        Path(__file__).parent.parent.parent.parent / "configs" / "modded_dac_vq.yaml",
+        Path("/content/SoniTranslate/fish_speech/configs/modded_dac_vq.yaml"),
+        Path("/content/SoniTranslate/fish_speech/fish_speech/configs/modded_dac_vq.yaml"),
+    ]
+    config_path = None
+    for cand in config_candidates:
+        if cand.is_file():
+            config_path = cand
+            break
+
+    codec = None
+    if config_path is not None:
+        try:
+            cfg = OmegaConf.load(str(config_path))
+            codec = instantiate(cfg)
+        except Exception as e_hydra:
+            logger.warning(f"Hydra instantiate a echoue ({e_hydra}), basculement sur l'instanciation directe...")
+            codec = None
+
+    if codec is None:
+        from functools import partial
+        try:
+            from fish_speech.models.dac.modded_dac import DAC, ModelArgs, WindowLimitedTransformer
+            from fish_speech.models.dac.rvq import DownsampleResidualVectorQuantize
+        except ImportError:
+            from fish_speech.fish_speech.models.dac.modded_dac import DAC, ModelArgs, WindowLimitedTransformer
+            from fish_speech.fish_speech.models.dac.rvq import DownsampleResidualVectorQuantize
+
+        transformer_general_config = partial(
+            ModelArgs,
+            block_size=8192,
+            n_local_heads=-1,
+            head_dim=64,
+            rope_base=10000,
+            norm_eps=1e-5,
+            dropout_rate=0.1,
+            attn_dropout_rate=0.1,
+            channels_first=True,
+        )
+        post_cfg = ModelArgs(
+            block_size=2048,
+            n_layer=8,
+            n_head=16,
+            dim=1024,
+            intermediate_size=3072,
+            n_local_heads=-1,
+            head_dim=64,
+            rope_base=10000,
+            norm_eps=1e-5,
+            dropout_rate=0.1,
+            attn_dropout_rate=0.1,
+            channels_first=True,
+        )
+        post_module = WindowLimitedTransformer(
+            causal=True,
+            window_size=128,
+            input_dim=1024,
+            config=post_cfg,
+        )
+        pre_cfg = ModelArgs(
+            block_size=2048,
+            n_layer=8,
+            n_head=16,
+            dim=1024,
+            intermediate_size=3072,
+            n_local_heads=-1,
+            head_dim=64,
+            rope_base=10000,
+            norm_eps=1e-5,
+            dropout_rate=0.1,
+            attn_dropout_rate=0.1,
+            channels_first=True,
+        )
+        pre_module = WindowLimitedTransformer(
+            causal=True,
+            window_size=128,
+            input_dim=1024,
+            config=pre_cfg,
+        )
+        quantizer = DownsampleResidualVectorQuantize(
+            input_dim=1024,
+            n_codebooks=9,
+            codebook_size=1024,
+            codebook_dim=8,
+            quantizer_dropout=0.5,
+            downsample_factor=(2, 2),
+            post_module=post_module,
+            pre_module=pre_module,
+            semantic_codebook_size=4096,
+        )
+        codec = DAC(
+            sample_rate=44100,
+            encoder_dim=64,
+            encoder_rates=[2, 4, 8, 8],
+            decoder_dim=1536,
+            decoder_rates=[8, 8, 4, 2],
+            encoder_transformer_layers=[0, 0, 0, 4],
+            decoder_transformer_layers=[4, 0, 0, 0],
+            transformer_general_config=transformer_general_config,
+            quantizer=quantizer,
+        )
+
 
     state_dict = torch.load(
         codec_checkpoint_path, map_location="cpu", mmap=True, weights_only=True

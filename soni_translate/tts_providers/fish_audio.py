@@ -22,7 +22,123 @@ FISH_AUDIO_DECODER_CACHE = None
 FISH_AUDIO_PROMPT_CACHE = {}
 
 
+def load_direct_codec(codec_checkpoint_path, device, precision=torch.float16):
+    """Instanciation directe du codec DAC Fish Audio en pur Python sans dépendre d'Hydra."""
+    try:
+        from fish_speech.models.dac.modded_dac import DAC, ModelArgs, WindowLimitedTransformer
+        from fish_speech.models.dac.rvq import DownsampleResidualVectorQuantize
+    except ImportError:
+        from fish_speech.fish_speech.models.dac.modded_dac import DAC, ModelArgs, WindowLimitedTransformer
+        from fish_speech.fish_speech.models.dac.rvq import DownsampleResidualVectorQuantize
+
+    from functools import partial
+    from torch.nn.utils.parametrize import is_parametrized, remove_parametrizations
+
+    transformer_general_config = partial(
+        ModelArgs,
+        block_size=8192,
+        n_local_heads=-1,
+        head_dim=64,
+        rope_base=10000,
+        norm_eps=1e-5,
+        dropout_rate=0.1,
+        attn_dropout_rate=0.1,
+        channels_first=True,
+    )
+
+    post_cfg = ModelArgs(
+        block_size=2048,
+        n_layer=8,
+        n_head=16,
+        dim=1024,
+        intermediate_size=3072,
+        n_local_heads=-1,
+        head_dim=64,
+        rope_base=10000,
+        norm_eps=1e-5,
+        dropout_rate=0.1,
+        attn_dropout_rate=0.1,
+        channels_first=True,
+    )
+    post_module = WindowLimitedTransformer(
+        causal=True,
+        window_size=128,
+        input_dim=1024,
+        config=post_cfg,
+    )
+    pre_cfg = ModelArgs(
+        block_size=2048,
+        n_layer=8,
+        n_head=16,
+        dim=1024,
+        intermediate_size=3072,
+        n_local_heads=-1,
+        head_dim=64,
+        rope_base=10000,
+        norm_eps=1e-5,
+        dropout_rate=0.1,
+        attn_dropout_rate=0.1,
+        channels_first=True,
+    )
+    pre_module = WindowLimitedTransformer(
+        causal=True,
+        window_size=128,
+        input_dim=1024,
+        config=pre_cfg,
+    )
+    quantizer = DownsampleResidualVectorQuantize(
+        input_dim=1024,
+        n_codebooks=9,
+        codebook_size=1024,
+        codebook_dim=8,
+        quantizer_dropout=0.5,
+        downsample_factor=(2, 2),
+        post_module=post_module,
+        pre_module=pre_module,
+        semantic_codebook_size=4096,
+    )
+    codec = DAC(
+        sample_rate=44100,
+        encoder_dim=64,
+        encoder_rates=[2, 4, 8, 8],
+        decoder_dim=1536,
+        decoder_rates=[8, 8, 4, 2],
+        encoder_transformer_layers=[0, 0, 0, 4],
+        decoder_transformer_layers=[4, 0, 0, 0],
+        transformer_general_config=transformer_general_config,
+        quantizer=quantizer,
+    )
+
+    state_dict = torch.load(
+        codec_checkpoint_path, map_location="cpu", mmap=True, weights_only=True
+    )
+    if "state_dict" in state_dict:
+        state_dict = state_dict["state_dict"]
+    if any("generator" in k for k in state_dict):
+        state_dict = {
+            k.replace("generator.", ""): v
+            for k, v in state_dict.items()
+            if "generator." in k
+        }
+    rebuilt_buffers = {
+        f"{name}.{buffer}" if name else buffer
+        for name, module in codec.named_modules()
+        for buffer in module._non_persistent_buffers_set
+    }
+    state_dict = {k: v for k, v in state_dict.items() if k not in rebuilt_buffers}
+    codec.load_state_dict(state_dict, strict=True)
+    codec.eval()
+    for module in list(codec.modules()):
+        if is_parametrized(module, "weight"):
+            remove_parametrizations(module, "weight", leave_parametrized=True)
+        elif hasattr(module, "weight_g"):
+            torch.nn.utils.remove_weight_norm(module)
+    codec.to(device=device, dtype=precision)
+    return codec
+
+
 class FishAudioProvider(BaseTTSProvider):
+
     def __init__(self):
         super().__init__()
         # Détection du GPU et forçage de la précision FP16
@@ -91,24 +207,40 @@ class FishAudioProvider(BaseTTSProvider):
                 FISH_AUDIO_MODEL_CACHE = None
                 FISH_AUDIO_DECODE_FN = None
 
-        # 2. Chargement du décodeur Codec DAC en FP16 via load_codec_model officiel
+        # 2. Chargement du décodeur Codec DAC en FP16
+
         if FISH_AUDIO_DECODER_CACHE is None:
-            try:
-                if os.path.exists(codec_file):
+            if os.path.exists(codec_file):
+                self.logger.info(f"Chargement du codec DAC S2-Pro ({self.dtype})...")
+                codec = None
+                try:
                     from fish_speech.models.text2semantic.inference import load_codec_model
-                    self.logger.info(f"Chargement du codec DAC S2-Pro ({self.dtype})...")
                     codec = load_codec_model(
                         codec_checkpoint_path=codec_file,
                         device=self.device,
                         precision=self.dtype
                     )
+                except Exception as e_hydra:
+                    self.logger.info(f"Basculement sur l'instanciation directe du codec DAC ({e_hydra})...")
+                    try:
+                        codec = load_direct_codec(
+                            codec_checkpoint_path=codec_file,
+                            device=self.device,
+                            precision=self.dtype
+                        )
+                    except Exception as e_direct:
+                        import traceback
+                        self.logger.warning(f"Impossible de charger le décodeur codec ({e_direct}): {traceback.format_exc()}")
+                        codec = None
+
+                if codec is not None:
                     FISH_AUDIO_DECODER_CACHE = codec
                     self.logger.info("Codec DAC chargé avec succès.")
-            except Exception as e_dec:
-                self.logger.warning(f"Impossible de charger le décodeur codec ({e_dec}).")
-                FISH_AUDIO_DECODER_CACHE = None
+                else:
+                    FISH_AUDIO_DECODER_CACHE = None
 
         return FISH_AUDIO_MODEL_CACHE, FISH_AUDIO_DECODER_CACHE, FISH_AUDIO_DECODE_FN
+
 
     def find_reference_materials(self, voice_name):
         """Localise le fichier audio de référence et son texte associé dans la voice library."""

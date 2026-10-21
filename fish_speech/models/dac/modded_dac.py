@@ -10,6 +10,41 @@ from torch.nn import functional as F
 from torch.nn.utils.parametrizations import weight_norm
 from torch.nn.utils.parametrize import remove_parametrizations
 
+# Compatibilite BaseModel (audiotools.ml ou fallback nn.Module)
+try:
+    from audiotools.ml import BaseModel
+except Exception:
+    class BaseModel(nn.Module):
+        pass
+
+# Couches DAC et Mixin (descript-audio-codec ou fallback autonome)
+try:
+    from dac.model.base import CodecMixin
+    from dac.nn.layers import Snake1d, WNConv1d, WNConvTranspose1d
+except Exception:
+    class CodecMixin:
+        def get_delay(self):
+            return 0
+
+    class Snake1d(nn.Module):
+        def __init__(self, channels):
+            super().__init__()
+            self.alpha = nn.Parameter(torch.ones(1, channels, 1))
+
+        def forward(self, x):
+            return x + (1.0 / (self.alpha + 1e-9)) * torch.sin(self.alpha * x).pow(2)
+
+    class WNConv1d(nn.Conv1d):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            weight_norm(self)
+
+    class WNConvTranspose1d(nn.ConvTranspose1d):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            weight_norm(self)
+
+
 
 @dataclass
 class VQResult:

@@ -8,6 +8,12 @@ import torch.nn.functional as F
 from torch.nn.utils.parametrizations import weight_norm
 from torch.nn.utils.parametrize import remove_parametrizations
 
+try:
+    from dac.nn.quantize import ResidualVectorQuantize
+except Exception:
+    ResidualVectorQuantize = None
+
+
 
 def unpad1d(x: torch.Tensor, paddings: tp.Tuple[int, int]):
     """Remove padding from x, handling properly zero padding. Only for 1d!"""
