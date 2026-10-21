@@ -5,18 +5,19 @@ import numpy as np
 import soundfile as sf
 from .base import BaseTTSProvider
 
-# Assurer l'accès au package fish_speech local si présent
+# Assurer l'accès au package fish_speech local
 _base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 for candidate_dir in [
     os.path.join(_base_dir, "fish_speech"),
-    os.path.join(_base_dir, "fish_speech_repo"),
-    "/content/SoniTranslate/fish_speech_repo",
+    os.path.join(_base_dir, "fish_speech", "fish_speech"),
+    "/content/SoniTranslate/fish_speech",
 ]:
     if os.path.exists(candidate_dir) and candidate_dir not in sys.path:
         sys.path.insert(0, candidate_dir)
 
 # Cache global de session pour garder le modèle chargé en VRAM (FP16)
 FISH_AUDIO_MODEL_CACHE = None
+FISH_AUDIO_DECODE_FN = None
 FISH_AUDIO_DECODER_CACHE = None
 FISH_AUDIO_PROMPT_CACHE = {}
 
@@ -53,15 +54,14 @@ class FishAudioProvider(BaseTTSProvider):
         return mapping.get(clean_lang, clean_lang[:2] if len(clean_lang) >= 2 else "en")
 
     def load_local_model(self):
-        """Charge le modèle Dual-AR Fish Audio S2-Pro en mémoire vive en FP16."""
-        global FISH_AUDIO_MODEL_CACHE, FISH_AUDIO_DECODER_CACHE
+        """Charge le modèle Dual-AR Fish Audio S2-Pro et le codec DAC en mémoire vive en FP16."""
+        global FISH_AUDIO_MODEL_CACHE, FISH_AUDIO_DECODE_FN, FISH_AUDIO_DECODER_CACHE
         if FISH_AUDIO_MODEL_CACHE is not None and FISH_AUDIO_DECODER_CACHE is not None:
-            return FISH_AUDIO_MODEL_CACHE, FISH_AUDIO_DECODER_CACHE
+            return FISH_AUDIO_MODEL_CACHE, FISH_AUDIO_DECODER_CACHE, FISH_AUDIO_DECODE_FN
 
         self.logger.info(f"Fish Audio S2-Pro : Initialisation locale en FP16 sur '{self.device}'...")
         os.makedirs(self.local_dir, exist_ok=True)
 
-        # Téléchargement automatique depuis Hugging Face si le dossier est vide
         codec_file = os.path.join(self.local_dir, "codec.pth")
         if not os.path.exists(codec_file) or not os.listdir(self.local_dir):
             self.logger.info("Téléchargement des poids officiels Fish Audio S2-Pro depuis Hugging Face...")
@@ -72,43 +72,43 @@ class FishAudioProvider(BaseTTSProvider):
                 local_dir_use_symlinks=False
             )
 
-        # 1. Chargement du modèle DualAR / Transformer en FP16
-        try:
-            from fish_speech.models.text2semantic.llama import BaseTransformer
-            self.logger.info(f"Chargement du transformer Dual-AR S2-Pro ({self.dtype})...")
-            model = BaseTransformer.from_pretrained(
-                self.local_dir,
-                device=self.device,
-                torch_dtype=self.dtype,
-            )
-            model.eval()
-            FISH_AUDIO_MODEL_CACHE = model
-        except Exception as e_model:
-            self.logger.warning(f"Impossible de charger le modèle via fish_speech ({e_model}).")
-            FISH_AUDIO_MODEL_CACHE = None
+        # 1. Chargement du modèle DualAR / Transformer en FP16 via init_model officiel
+        if FISH_AUDIO_MODEL_CACHE is None or FISH_AUDIO_DECODE_FN is None:
+            try:
+                from fish_speech.models.text2semantic.inference import init_model
+                self.logger.info(f"Chargement du transformer Dual-AR S2-Pro ({self.dtype})...")
+                model, decode_one_token = init_model(
+                    checkpoint_path=self.local_dir,
+                    device=self.device,
+                    precision=self.dtype,
+                    compile=False
+                )
+                FISH_AUDIO_MODEL_CACHE = model
+                FISH_AUDIO_DECODE_FN = decode_one_token
+                self.logger.info("Modèle Dual-AR S2-Pro chargé avec succès.")
+            except Exception as e_model:
+                self.logger.warning(f"Impossible de charger le modèle via fish_speech ({e_model}).")
+                FISH_AUDIO_MODEL_CACHE = None
+                FISH_AUDIO_DECODE_FN = None
 
-        # 2. Chargement du décodeur Codec DAC / VQ-GAN en FP16
-        try:
-            if os.path.exists(codec_file):
-                try:
-                    from fish_speech.models.dac.inference import load_model as load_codec
-                    FISH_AUDIO_DECODER_CACHE = load_codec(
-                        config_name="firefly_gan_vq",
-                        checkpoint_path=codec_file,
-                        device=self.device
+        # 2. Chargement du décodeur Codec DAC en FP16 via load_codec_model officiel
+        if FISH_AUDIO_DECODER_CACHE is None:
+            try:
+                if os.path.exists(codec_file):
+                    from fish_speech.models.text2semantic.inference import load_codec_model
+                    self.logger.info(f"Chargement du codec DAC S2-Pro ({self.dtype})...")
+                    codec = load_codec_model(
+                        codec_checkpoint_path=codec_file,
+                        device=self.device,
+                        precision=self.dtype
                     )
-                except Exception:
-                    from fish_speech.models.vqgan.inference import load_model as load_codec
-                    FISH_AUDIO_DECODER_CACHE = load_codec(
-                        config_name="firefly_gan_vq",
-                        checkpoint_path=codec_file,
-                        device=self.device
-                    )
-        except Exception as e_dec:
-            self.logger.warning(f"Impossible de charger le décodeur codec ({e_dec}).")
-            FISH_AUDIO_DECODER_CACHE = None
+                    FISH_AUDIO_DECODER_CACHE = codec
+                    self.logger.info("Codec DAC chargé avec succès.")
+            except Exception as e_dec:
+                self.logger.warning(f"Impossible de charger le décodeur codec ({e_dec}).")
+                FISH_AUDIO_DECODER_CACHE = None
 
-        return FISH_AUDIO_MODEL_CACHE, FISH_AUDIO_DECODER_CACHE
+        return FISH_AUDIO_MODEL_CACHE, FISH_AUDIO_DECODER_CACHE, FISH_AUDIO_DECODE_FN
 
     def find_reference_materials(self, voice_name):
         """Localise le fichier audio de référence et son texte associé dans la voice library."""
@@ -262,48 +262,50 @@ class FishAudioProvider(BaseTTSProvider):
 
         # 3. Priorité C : Pipeline local direct en FP16
         try:
-            model, decoder = self.load_local_model()
+            model, decoder, decode_one_token = self.load_local_model()
             if model is not None and decoder is not None:
-                from fish_speech.models.text2semantic.inference import generate_long, decode_one_token_ar
+                from fish_speech.models.text2semantic.inference import (
+                    encode_audio,
+                    decode_to_audio,
+                    generate_long,
+                )
                 
                 self.logger.info(f"Fish Audio S2-Pro : Synthèse FP16 de '{clean_text[:40]}...'")
                 
                 # Encodage ou récupération en cache des tokens acoustiques de référence
                 global FISH_AUDIO_PROMPT_CACHE
                 prompt_tokens = FISH_AUDIO_PROMPT_CACHE.get(ref_audio)
-                if prompt_tokens is None and hasattr(decoder, "encode"):
-                    with torch.no_grad():
-                        audio_data, sr = sf.read(ref_audio)
-                        if len(audio_data.shape) > 1:
-                            audio_data = audio_data.mean(axis=1)
-                        audio_tensor = torch.tensor(audio_data, dtype=torch.float32, device=self.device).unsqueeze(0).unsqueeze(0)
-                        prompt_tokens = decoder.encode(audio_tensor)
-                        FISH_AUDIO_PROMPT_CACHE[ref_audio] = prompt_tokens
+                if prompt_tokens is None:
+                    prompt_tokens = encode_audio(ref_audio, decoder, self.device)
+                    FISH_AUDIO_PROMPT_CACHE[ref_audio] = prompt_tokens
 
                 # Génération des codes sémantiques Dual-AR en FP16
                 with torch.inference_mode():
-                    with torch.autocast(device_type="cuda", dtype=self.dtype) if self.device == "cuda" else torch.no_grad():
-                        codes = generate_long(
-                            model=model,
-                            device=self.device,
-                            decode_one_token=decode_one_token_ar,
-                            text=clean_text,
-                            prompt_text=ref_text or "",
-                            prompt_tokens=prompt_tokens,
-                            num_samples=1,
-                            max_new_tokens=int(kwargs.get("max_new_tokens", 1024)),
-                            top_p=float(kwargs.get("top_p", 0.7)),
-                            temperature=float(kwargs.get("temperature", 0.7)),
-                            repetition_penalty=float(kwargs.get("repetition_penalty", 1.2)),
-                        )
-                        
-                        # Décodage des codes vers le signal audio via DAC
-                        if hasattr(decoder, "decode"):
-                            wav = decoder.decode(codes)
-                        else:
-                            wav = decoder(codes)
-                            
-                        wav_out = wav.squeeze().cpu().numpy().astype(np.float32)
+                    generator = generate_long(
+                        model=model,
+                        device=self.device,
+                        decode_one_token=decode_one_token,
+                        text=clean_text,
+                        prompt_text=ref_text or "",
+                        prompt_tokens=prompt_tokens,
+                        num_samples=1,
+                        max_new_tokens=int(kwargs.get("max_new_tokens", 1024)),
+                        top_p=float(kwargs.get("top_p", 0.7)),
+                        top_k=int(kwargs.get("top_k", 30)),
+                        temperature=float(kwargs.get("temperature", 0.7)),
+                        compile=False,
+                    )
+                    
+                    audio_chunks = []
+                    for resp in generator:
+                        if resp.action == "sample" and resp.codes is not None and resp.codes.size(1) > 0:
+                            chunk = decode_to_audio(resp.codes.to(self.device), decoder)
+                            audio_chunks.append(chunk.detach().cpu().float().numpy())
+                    
+                    if audio_chunks:
+                        wav_out = np.concatenate(audio_chunks, axis=-1)
+                    else:
+                        wav_out = np.array([], dtype=np.float32)
 
                 # Normalisation anti-clipping
                 if wav_out is not None and getattr(wav_out, "size", len(wav_out)) > 0:
