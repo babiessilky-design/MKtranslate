@@ -778,18 +778,24 @@ def generate_long(
         )
         return
 
-    use_prompt = bool(prompt_text) and bool(prompt_tokens)
-    if use_prompt and isinstance(prompt_text, str):
-        prompt_text = [prompt_text]
+    if isinstance(prompt_tokens, torch.Tensor):
         prompt_tokens = [prompt_tokens]
+
+    if isinstance(prompt_text, str):
+        prompt_text = [prompt_text]
+
+    has_prompt_text = prompt_text is not None and len(prompt_text) > 0 and any(len(str(t).strip()) > 0 for t in prompt_text)
+    has_prompt_tokens = prompt_tokens is not None and len(prompt_tokens) > 0
+    use_prompt = has_prompt_text and has_prompt_tokens
 
     if use_prompt:
         assert len(prompt_text) == len(
             prompt_tokens
         ), "Prompt text and tokens must have the same length"
 
-    if prompt_tokens:
-        prompt_tokens = [i.cpu() for i in prompt_tokens]
+    if prompt_tokens is not None:
+        prompt_tokens = [i.cpu() if isinstance(i, torch.Tensor) else i for i in prompt_tokens]
+
 
     model_size = sum(p.numel() for p in model.parameters() if p.requires_grad)
     tokenizer = model.tokenizer
@@ -1001,9 +1007,12 @@ def generate_long_drama3(
     within the CUDA-graph capacity.
     """
     if isinstance(prompt_text, str):
-        prompt_text, prompt_tokens = [prompt_text], [prompt_tokens]
-    prompt_text = list(prompt_text or [])
-    prompt_tokens = [codes.cpu() for codes in (prompt_tokens or [])]
+        prompt_text = [prompt_text]
+    if isinstance(prompt_tokens, torch.Tensor):
+        prompt_tokens = [prompt_tokens]
+    prompt_text = list(prompt_text) if prompt_text is not None else []
+    prompt_tokens = [codes.cpu() if isinstance(codes, torch.Tensor) else codes for codes in prompt_tokens] if prompt_tokens is not None else []
+
     chunks = [text] if single_chunk else split_drama3_text(text) or [text]
     # Reject bad text in any chunk before generating: failing at a later chunk
     # would waste the earlier ones, and cut a stream short after it started.

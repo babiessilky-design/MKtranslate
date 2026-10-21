@@ -418,8 +418,8 @@ class FishAudioProvider(BaseTTSProvider):
                         device=self.device,
                         decode_one_token=decode_one_token,
                         text=clean_text,
-                        prompt_text=ref_text or "",
-                        prompt_tokens=prompt_tokens,
+                        prompt_text=ref_text or "Voix de reference.",
+                        prompt_tokens=[prompt_tokens] if isinstance(prompt_tokens, torch.Tensor) else prompt_tokens,
                         num_samples=1,
                         max_new_tokens=int(kwargs.get("max_new_tokens", 1024)),
                         top_p=float(kwargs.get("top_p", 0.7)),
@@ -448,7 +448,9 @@ class FishAudioProvider(BaseTTSProvider):
                     sf.write(output_file, wav_out, sample_rate)
                     return
         except Exception as e_local:
-            self.logger.error(f"Fish Audio Local FP16 Generation Error: {str(e_local)}")
+            import traceback
+            self.logger.error(f"Fish Audio Local FP16 Generation Error: {str(e_local)}\n{traceback.format_exc()}")
+
 
         # 4. Filet de sécurité anti-crash (silence propre)
         self.logger.warning(f"Fish Audio : Création d'un segment de sécurité pour '{clean_text[:30]}'")
