@@ -192,6 +192,9 @@ def parse_gemini_transcription(text_resp, default_lang="en", audio_duration=None
     elif isinstance(parsed_data, list):
         raw_segments = parsed_data
 
+    speaker_map = {}
+    speaker_counter = 0
+
     formatted_segments = []
     if raw_segments:
         for seg in raw_segments:
@@ -205,12 +208,18 @@ def parse_gemini_transcription(text_resp, default_lang="en", audio_duration=None
                     continue
                 if end_val <= start_val:
                     end_val = start_val + 0.5
-                spk_raw = seg.get("speaker", "SPEAKER_00")
-                spk_nums = re.findall(r'\d+', str(spk_raw))
-                spk_id = int(spk_nums[0]) if spk_nums else 0
-                if max_spk_val > 0 and spk_id >= max_spk_val:
-                    spk_id = max_spk_val - 1
-                spk = f"SPEAKER_{spk_id:02d}"
+
+                spk_raw = str(seg.get("speaker", "")).strip()
+                if not spk_raw:
+                    spk_raw = "SPEAKER_00"
+
+                if spk_raw not in speaker_map:
+                    if max_spk_val > 0 and speaker_counter >= max_spk_val:
+                        speaker_map[spk_raw] = f"SPEAKER_{max_spk_val - 1:02d}"
+                    else:
+                        speaker_map[spk_raw] = f"SPEAKER_{speaker_counter:02d}"
+                        speaker_counter += 1
+                spk = speaker_map[spk_raw]
 
                 text_val = str(seg["text"]).strip()
                 if text_val:
@@ -221,12 +230,12 @@ def parse_gemini_transcription(text_resp, default_lang="en", audio_duration=None
                         "speaker": spk
                     })
 
-    # 2. Si aucun segment JSON valide, parser les lignes horodatées (ex: [00:01.25 -> 00:04.50] SPEAKER_00: Texte)
+    # 2. Si aucun segment JSON valide, parser les lignes horodatees (ex: [00:01.25 -> 00:04.50] SPEAKER_00: Texte)
     if not formatted_segments:
         logger.info("Parsing ligne par ligne de la transcription Gemini...")
         time_pattern = re.compile(
             r'(?:\[|\()?\s*(\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?|\d+(?:[.,]\d+)?)\s*(?:-->|->|-)\s*(\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?|\d+(?:[.,]\d+)?)\s*(?:\]|\))?'
-            r'(?:\s*\[?(?:SPEAKER|Speaker|locuteur|Intervenant)?\s*[_#:\-]?\s*(\d+)\]?)?'
+            r'(?:\s*\[?(?:SPEAKER|Speaker|locuteur|Intervenant)?\s*[_#:\-]?\s*([a-zA-Z0-9_\-]+)\]?)?'
             r'[:\s]+(.*)',
             re.IGNORECASE
         )
@@ -249,11 +258,15 @@ def parse_gemini_transcription(text_resp, default_lang="en", audio_duration=None
                 try:
                     t_start = parse_time(m.group(1))
                     t_end = parse_time(m.group(2))
-                    spk_idx = m.group(3)
-                    spk_id = int(spk_idx) if spk_idx else 0
-                    if max_spk_val > 0 and spk_id >= max_spk_val:
-                        spk_id = max_spk_val - 1
-                    spk = f"SPEAKER_{spk_id:02d}"
+                    spk_raw = m.group(3)
+                    spk_raw = str(spk_raw).strip() if spk_raw else "SPEAKER_00"
+                    if spk_raw not in speaker_map:
+                        if max_spk_val > 0 and speaker_counter >= max_spk_val:
+                            speaker_map[spk_raw] = f"SPEAKER_{max_spk_val - 1:02d}"
+                        else:
+                            speaker_map[spk_raw] = f"SPEAKER_{speaker_counter:02d}"
+                            speaker_counter += 1
+                    spk = speaker_map[spk_raw]
                     txt = m.group(4).strip()
                     if t_end <= t_start:
                         t_end = t_start + 0.5
@@ -356,23 +369,20 @@ def gemini_api_transcribe(
         transcribe_api_models = [m for m in available_api_models if "transcribe" in m.lower() and "2.0" not in m]
         flash_api_models = [m for m in available_api_models if "flash" in m.lower() and "transcribe" not in m.lower() and "2.0" not in m]
 
-        candidate_models = (
-            [os.environ.get("GEMINI_TRANSCRIBE_MODEL", model_name), "gemini-3.5-transcribe"]
-            + transcribe_api_models
-            + [
-                "gemini-3.8-flash",
-                "gemini-3.7-flash",
-                "gemini-3.5-flash",
-                "gemini-2.5-flash",
-                "gemini-1.5-flash",
-            ]
-            + flash_api_models
-            + [
-                "gemini-3.8-pro",
-                "gemini-2.5-pro",
-                "gemini-1.5-pro",
-            ]
-        )
+        candidate_models = []
+        if os.environ.get("GEMINI_TRANSCRIBE_MODEL"):
+            candidate_models.append(os.environ["GEMINI_TRANSCRIBE_MODEL"])
+        candidate_models.extend([
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro",
+            "gemini-3.5-transcribe",
+            "gemini-3.8-flash",
+            "gemini-3.7-flash",
+        ])
+        candidate_models.extend(transcribe_api_models)
+        candidate_models.extend(flash_api_models)
 
         unique_models = []
         for m in candidate_models:
@@ -401,18 +411,23 @@ def gemini_api_transcribe(
 
         if max_spk and max_spk > 0:
             if max_spk == 1:
-                rule_speakers = "1. There is at most 1 speaker in this audio. Label all speech strictly as SPEAKER_00."
+                rule_speakers = "1. There is only 1 speaker in this audio. Label all speech strictly as 'SPEAKER_00'."
             else:
                 last_spk = f"SPEAKER_{max_spk - 1:02d}"
                 rule_speakers = (
-                    f"1. There are at most {max_spk} speakers in this audio. "
-                    f"Label them strictly among SPEAKER_00 to {last_spk}."
+                    f"1. MANDATORY SPEAKER DIARIZATION ({max_spk} SPEAKERS): There are {max_spk} distinct speakers in this audio. "
+                    f"You MUST identify who is speaking each sentence and assign each segment strictly to its speaker tag from 'SPEAKER_00' to '{last_spk}'. "
+                    f"Carefully distinguish speakers by their vocal pitch, gender, tone, and dialogue turns. "
+                    f"CRITICAL: Do NOT put all segments on SPEAKER_00! You must alternate between speakers when different people talk."
                 )
         else:
-            rule_speakers = "1. Identify all distinct speakers and label them strictly as SPEAKER_00, SPEAKER_01, SPEAKER_02, etc. (0-indexed)."
+            rule_speakers = (
+                "1. MANDATORY SPEAKER DIARIZATION: Identify all distinct speakers and label them strictly as SPEAKER_00, SPEAKER_01, SPEAKER_02, etc. (0-indexed). "
+                "Carefully distinguish speakers by vocal pitch, gender, and conversational turns."
+            )
 
         prompt = f"""You are an expert speech recognition and speaker diarization engine.
-Transcribe the provided audio accurately.
+Transcribe the provided audio accurately with precise speaker diarization.
 {lang_instruction}
 
 CRITICAL RULES:
@@ -432,8 +447,14 @@ CRITICAL RULES:
     {{
       "start": 0.0,
       "end": 2.5,
-      "text": "First sentence here.",
+      "text": "First speaker line here.",
       "speaker": "SPEAKER_00"
+    }},
+    {{
+      "start": 2.8,
+      "end": 5.2,
+      "text": "Second speaker answering here.",
+      "speaker": "SPEAKER_01"
     }}
   ]
 }}"""
@@ -792,6 +813,7 @@ def reencode_speakers(result, max_speakers=None):
             
         segment["speaker"] = speaker_mapping[old_speaker]
 
+    logger.info(f"Diarisation des locuteurs : {len(speaker_mapping)} locuteur(s) detecte(s) -> {speaker_mapping}")
     return result
 
 def diarize_speech(

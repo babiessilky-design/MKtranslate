@@ -1306,6 +1306,7 @@ class SoniTranslate(SoniTrCache):
                 batch_size,
                 literalize_numbers,
                 segment_duration_limit,
+                max_speakers,
                 (
                     "l_unit"
                     if text_segmentation_scale in ["word", "character"]
