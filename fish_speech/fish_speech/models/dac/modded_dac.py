@@ -34,15 +34,12 @@ except Exception:
         def forward(self, x):
             return x + (1.0 / (self.alpha + 1e-9)) * torch.sin(self.alpha * x).pow(2)
 
-    class WNConv1d(nn.Conv1d):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            weight_norm(self)
+    def WNConv1d(*args, **kwargs):
+        return weight_norm(nn.Conv1d(*args, **kwargs))
 
-    class WNConvTranspose1d(nn.ConvTranspose1d):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            weight_norm(self)
+    def WNConvTranspose1d(*args, **kwargs):
+        return weight_norm(nn.ConvTranspose1d(*args, **kwargs))
+
 
 
 
