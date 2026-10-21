@@ -11,7 +11,7 @@ import torch
 import torch.serialization
 import torchaudio
 
-# Ajout des dossiers locaux chatterbox/src et omnivoice à sys.path
+# Ajout des dossiers locaux chatterbox/src, omnivoice et fish_speech à sys.path
 _current_dir = os.path.dirname(os.path.abspath(__file__))
 _chatterbox_src = os.path.join(_current_dir, "chatterbox", "src")
 if os.path.exists(_chatterbox_src) and _chatterbox_src not in sys.path:
@@ -20,6 +20,10 @@ if os.path.exists(_chatterbox_src) and _chatterbox_src not in sys.path:
 _omnivoice_src = os.path.join(_current_dir, "omnivoice")
 if os.path.exists(_omnivoice_src) and _omnivoice_src not in sys.path:
     sys.path.insert(0, _omnivoice_src)
+
+for _f_dir in [os.path.join(_current_dir, "fish_speech"), os.path.join(_current_dir, "fish_speech_repo"), "/content/SoniTranslate/fish_speech_repo"]:
+    if os.path.exists(_f_dir) and _f_dir not in sys.path:
+        sys.path.insert(0, _f_dir)
 
 
 
@@ -304,7 +308,9 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
             v_low.startswith("elevenlabs/") or 
             v_low.startswith("custom/") or
             v_low.startswith("chatterbox/") or
-            v_low.startswith("omnivoice/")
+            v_low.startswith("omnivoice/") or
+            v_low.startswith("fishaudio/") or
+            v_low.startswith("fish_audio/")
         )
 
     def sanitize_tts_text(t):
@@ -452,8 +458,8 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
             except Exception as e:
                 logger.error(f"ElevenLabs Error: {str(e)}")
                 
-        # LOGIQUE DE TA BIBLIOTHÈQUE DE VOIX (F5-TTS, ChatterBox, OmniVoice)
-        elif voice.startswith("Custom/") or voice.startswith("ChatterBox/") or voice.startswith("Chatterbox/") or voice.startswith("OmniVoice/") or voice.startswith("Omnivoice/"):
+        # LOGIQUE DE TA BIBLIOTHÈQUE DE VOIX (F5-TTS, ChatterBox, OmniVoice, Fish Audio S2-Pro)
+        elif voice.startswith("Custom/") or voice.startswith("ChatterBox/") or voice.startswith("Chatterbox/") or voice.startswith("OmniVoice/") or voice.startswith("Omnivoice/") or voice.startswith("FishAudio/") or voice.startswith("fishaudio/") or voice.startswith("Fish_Audio/"):
             voice_name = voice.split("/")[-1]
             try:
                 # Localisation dynamique du dossier voice_library (local, soni_translate, ou Colab)
@@ -510,11 +516,13 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
                     with open(ref_txt_path, "r", encoding="utf-8") as f:
                         ref_text = f.read().strip()
                 else:
-                    ref_text = None  # None permet à OmniVoice de transcrire fidèlement avec Whisper
+                    ref_text = None  # None permet à OmniVoice et Fish Audio de transcrire fidèlement avec Whisper
                 
                 # Détermination du moteur de clonage
                 if voice.startswith("OmniVoice/") or voice.startswith("Omnivoice/"):
                     cloning_engine = "OmniVoice"
+                elif voice.startswith("FishAudio/") or voice.startswith("fishaudio/") or voice.startswith("Fish_Audio/"):
+                    cloning_engine = "Fish Audio S2-Pro"
                 elif voice.startswith("ChatterBox/") or voice.startswith("Chatterbox/"):
                     cloning_engine = "ChatterBox Multilingual"
                 else:
@@ -540,6 +548,11 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
                     from soni_translate.tts_providers.omnivoice import OmniVoiceProvider
                     omni_provider = OmniVoiceProvider()
                     omni_provider.generate(text=text, voice=voice, target_lang=TRANSLATE_AUDIO_TO, output_file=output_file, seed=42, seg_duration=seg_duration)
+                    generated_successfully = True
+                elif cloning_engine in ["Fish Audio S2-Pro (FP16)", "Fish Audio S2-Pro", "FishAudio", "Fish Audio"]:
+                    from soni_translate.tts_providers.fish_audio import FishAudioProvider
+                    fish_provider = FishAudioProvider()
+                    fish_provider.generate(text=text, voice=voice, target_lang=TRANSLATE_AUDIO_TO, output_file=output_file, seed=42, seg_duration=seg_duration)
                     generated_successfully = True
             except Exception as e:
                 logger.error(f"Custom Cloning Error ({voice_name}) with {cloning_engine}: {str(e)}")
@@ -608,6 +621,9 @@ class TTS_Info:
             "OmniVoice/ref_homme_fr",
             "OmniVoice/ref_femme_fr",
             "OmniVoice/cosy",
+            "FishAudio/ref_homme_fr",
+            "FishAudio/ref_femme_fr",
+            "FishAudio/cosy",
             "Custom/ref_homme_fr",
             "Custom/ref_femme_fr",
             "Custom/cosy",
@@ -620,12 +636,12 @@ class TTS_Info:
                 for file in os.listdir(vlib_dir):
                     if file.lower().endswith(('.wav', '.mp3', '.flac')):
                         clean_name = file.rsplit('.', 1)[0]
-                        for prefix in ["OmniVoice", "Custom", "ChatterBox"]:
+                        for prefix in ["OmniVoice", "FishAudio", "Custom", "ChatterBox"]:
                             v_id = f"{prefix}/{clean_name}"
                             if v_id not in list_custom_library:
                                 list_custom_library.append(v_id)
                         if clean_name == "f5-tts_cosy":
-                            for prefix in ["OmniVoice", "Custom", "ChatterBox"]:
+                            for prefix in ["OmniVoice", "FishAudio", "Custom", "ChatterBox"]:
                                 v_id = f"{prefix}/cosy"
                                 if v_id not in list_custom_library:
                                     list_custom_library.append(v_id)
@@ -2602,7 +2618,7 @@ def create_gui(theme, logs_in_gui=False):
                                 interactive=True
                             )
                             custom_cloning_engine_gui = gr.Dropdown(
-                                choices=["OmniVoice", "ChatterBox Multilingual", "F5-TTS"],
+                                choices=["OmniVoice", "Fish Audio S2-Pro (FP16)", "ChatterBox Multilingual", "F5-TTS"],
                                 value="OmniVoice",
                                 label="Custom Cloning Engine",
                                 info="Sélectionnez le moteur à utiliser pour cloner les voix commençant par 'Custom/' (OmniVoice par défaut).",
@@ -3553,16 +3569,22 @@ if __name__ == "__main__":
                         clean_name = file.rsplit('.', 1)[0]
                         v_id = f"Custom/{clean_name}"
                         v_omni = f"OmniVoice/{clean_name}"
+                        v_fish = f"FishAudio/{clean_name}"
                         if v_id not in list_custom_library:
                             list_custom_library.append(v_id)
                         if v_omni not in list_custom_library:
                             list_custom_library.append(v_omni)
+                        if v_fish not in list_custom_library:
+                            list_custom_library.append(v_fish)
         
         list_custom_voices = [
             # --- TES VOIX DE RÉFÉRENCE FORCEES EN DUR (SÉCURITÉ UI) ---
             "OmniVoice/cosy",
             "OmniVoice/ref_homme_fr",
             "OmniVoice/ref_femme_fr",
+            "FishAudio/cosy",
+            "FishAudio/ref_homme_fr",
+            "FishAudio/ref_femme_fr",
             "Custom/cosy",
             "Custom/ref_homme_fr",
             "Custom/ref_femme_fr",

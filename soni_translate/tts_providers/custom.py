@@ -14,6 +14,9 @@ class CustomCloningProvider(BaseTTSProvider):
             elif engine_name == "OmniVoice":
                 from .omnivoice import OmniVoiceProvider
                 self.providers[engine_name] = OmniVoiceProvider()
+            elif engine_name in ["Fish Audio S2-Pro (FP16)", "Fish Audio S2-Pro", "FishAudio", "Fish Audio"]:
+                from .fish_audio import FishAudioProvider
+                self.providers[engine_name] = FishAudioProvider()
             else:
                 # Moteur F5-TTS
                 from .f5 import F5Provider

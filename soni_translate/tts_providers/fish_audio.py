@@ -1,0 +1,324 @@
+import os
+import sys
+import torch
+import numpy as np
+import soundfile as sf
+from .base import BaseTTSProvider
+
+# Assurer l'accès au package fish_speech local si présent
+_base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+for candidate_dir in [
+    os.path.join(_base_dir, "fish_speech"),
+    os.path.join(_base_dir, "fish_speech_repo"),
+    "/content/SoniTranslate/fish_speech_repo",
+]:
+    if os.path.exists(candidate_dir) and candidate_dir not in sys.path:
+        sys.path.insert(0, candidate_dir)
+
+# Cache global de session pour garder le modèle chargé en VRAM (FP16)
+FISH_AUDIO_MODEL_CACHE = None
+FISH_AUDIO_DECODER_CACHE = None
+FISH_AUDIO_PROMPT_CACHE = {}
+
+
+class FishAudioProvider(BaseTTSProvider):
+    def __init__(self):
+        super().__init__()
+        # Détection du GPU et forçage de la précision FP16
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.dtype = torch.float16 if self.device == "cuda" else torch.float32
+        
+        # Dossier de stockage local des poids du modèle s2-pro dans MKtranslate
+        self.local_dir = os.path.join(_base_dir, "weights", "FishAudio")
+        self.api_url = os.getenv("FISH_API_URL", "http://127.0.0.1:8080/v1/tts")
+        self.api_key = os.getenv("FISH_API_KEY", "").strip()
+
+    def get_language_id(self, target_lang):
+        """Mappe la langue de SoniTranslate vers le code ISO reconnu par Fish Audio S2-Pro."""
+        clean_lang = str(target_lang).lower().strip()
+        mapping = {
+            "fr": "fr", "fra": "fr", "french": "fr", "français": "fr",
+            "en": "en", "eng": "en", "english": "en", "anglais": "en",
+            "es": "es", "spa": "es", "spanish": "es", "espagnol": "es",
+            "de": "de", "deu": "de", "german": "de", "allemand": "de",
+            "it": "it", "ita": "it", "italian": "it", "italien": "it",
+            "pt": "pt", "por": "pt", "portuguese": "pt", "portugais": "pt",
+            "ru": "ru", "rus": "ru", "russian": "ru", "russe": "ru",
+            "zh": "zh", "zho": "zh", "chinese": "zh", "chinois": "zh",
+            "ja": "ja", "jpn": "ja", "japanese": "ja", "japonais": "ja",
+            "ko": "ko", "kor": "ko", "korean": "ko", "coréen": "ko",
+            "ar": "ar", "ara": "ar", "arabic": "ar", "arabe": "ar",
+            "hi": "hi", "hin": "hi", "hindi": "hi"
+        }
+        return mapping.get(clean_lang, clean_lang[:2] if len(clean_lang) >= 2 else "en")
+
+    def load_local_model(self):
+        """Charge le modèle Dual-AR Fish Audio S2-Pro en mémoire vive en FP16."""
+        global FISH_AUDIO_MODEL_CACHE, FISH_AUDIO_DECODER_CACHE
+        if FISH_AUDIO_MODEL_CACHE is not None and FISH_AUDIO_DECODER_CACHE is not None:
+            return FISH_AUDIO_MODEL_CACHE, FISH_AUDIO_DECODER_CACHE
+
+        self.logger.info(f"Fish Audio S2-Pro : Initialisation locale en FP16 sur '{self.device}'...")
+        os.makedirs(self.local_dir, exist_ok=True)
+
+        # Téléchargement automatique depuis Hugging Face si le dossier est vide
+        codec_file = os.path.join(self.local_dir, "codec.pth")
+        if not os.path.exists(codec_file) or not os.listdir(self.local_dir):
+            self.logger.info("Téléchargement des poids officiels Fish Audio S2-Pro depuis Hugging Face...")
+            from huggingface_hub import snapshot_download
+            snapshot_download(
+                repo_id="fishaudio/s2-pro",
+                local_dir=self.local_dir,
+                local_dir_use_symlinks=False
+            )
+
+        # 1. Chargement du modèle DualAR / Transformer en FP16
+        try:
+            from fish_speech.models.text2semantic.llama import BaseTransformer
+            self.logger.info(f"Chargement du transformer Dual-AR S2-Pro ({self.dtype})...")
+            model = BaseTransformer.from_pretrained(
+                self.local_dir,
+                device=self.device,
+                torch_dtype=self.dtype,
+            )
+            model.eval()
+            FISH_AUDIO_MODEL_CACHE = model
+        except Exception as e_model:
+            self.logger.warning(f"Impossible de charger le modèle via fish_speech ({e_model}).")
+            FISH_AUDIO_MODEL_CACHE = None
+
+        # 2. Chargement du décodeur Codec DAC / VQ-GAN en FP16
+        try:
+            if os.path.exists(codec_file):
+                try:
+                    from fish_speech.models.dac.inference import load_model as load_codec
+                    FISH_AUDIO_DECODER_CACHE = load_codec(
+                        config_name="firefly_gan_vq",
+                        checkpoint_path=codec_file,
+                        device=self.device
+                    )
+                except Exception:
+                    from fish_speech.models.vqgan.inference import load_model as load_codec
+                    FISH_AUDIO_DECODER_CACHE = load_codec(
+                        config_name="firefly_gan_vq",
+                        checkpoint_path=codec_file,
+                        device=self.device
+                    )
+        except Exception as e_dec:
+            self.logger.warning(f"Impossible de charger le décodeur codec ({e_dec}).")
+            FISH_AUDIO_DECODER_CACHE = None
+
+        return FISH_AUDIO_MODEL_CACHE, FISH_AUDIO_DECODER_CACHE
+
+    def find_reference_materials(self, voice_name):
+        """Localise le fichier audio de référence et son texte associé dans la voice library."""
+        voice_lib_dirs = [
+            os.path.join(_base_dir, "voice_library"),
+            os.path.join(_base_dir, "soni_translate", "voice_library"),
+            "voice_library",
+            os.path.join("soni_translate", "voice_library"),
+            "/content/SoniTranslate/voice_library",
+        ]
+        
+        ref_audio = None
+        ref_text = None
+        ref_txt_path = None
+
+        names_to_try = [voice_name]
+        v_low = voice_name.lower()
+        if v_low in ["cosy", "f5-tts_cosy"]:
+            names_to_try = ["cosy", "f5-tts_cosy"]
+        elif v_low in ["ref_homme_fr", "ref_homme", "homme"]:
+            names_to_try = ["ref_homme_fr", "ref_homme", "homme"]
+        elif v_low in ["ref_femme_fr", "ref_femme", "femme"]:
+            names_to_try = ["ref_femme_fr", "ref_femme", "femme"]
+
+        for vname in names_to_try:
+            for vdir in voice_lib_dirs:
+                if not os.path.exists(vdir):
+                    continue
+                for ext in [".wav", ".mp3", ".flac"]:
+                    cand = os.path.join(vdir, f"{vname}{ext}")
+                    if os.path.exists(cand):
+                        ref_audio = os.path.abspath(cand)
+                        cand_txt = os.path.join(vdir, f"{vname}.txt")
+                        if os.path.exists(cand_txt):
+                            ref_txt_path = os.path.abspath(cand_txt)
+                        break
+                if ref_audio:
+                    break
+            if ref_audio:
+                break
+
+        if not ref_audio:
+            for fallback_name in ["ref_homme_fr", "ref_femme_fr", "cosy", "f5-tts_cosy"]:
+                for vdir in voice_lib_dirs:
+                    cand = os.path.join(vdir, f"{fallback_name}.wav")
+                    if os.path.exists(cand):
+                        ref_audio = os.path.abspath(cand)
+                        cand_txt = os.path.join(vdir, f"{fallback_name}.txt")
+                        if os.path.exists(cand_txt):
+                            ref_txt_path = os.path.abspath(cand_txt)
+                        break
+                if ref_audio:
+                    break
+
+        if not ref_audio:
+            raise FileNotFoundError(f"Reference audio not found for Fish Audio voice: {voice_name}")
+
+        if ref_txt_path and os.path.exists(ref_txt_path):
+            with open(ref_txt_path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if content:
+                    ref_text = content
+
+        return ref_audio, ref_text, ref_txt_path
+
+    def _generate_via_sdk(self, text, ref_audio, output_file):
+        """Génération ultra-rapide via le SDK officiel Fish Audio (si FISH_API_KEY renseignée)."""
+        from fishaudio import FishAudio
+        from fishaudio.utils import save
+        
+        client = FishAudio(api_key=self.api_key)
+        self.logger.info("Fish Audio : Synthèse via Cloud API (s2-pro)...")
+        audio_stream = client.tts.convert(
+            text=text,
+            model="s2-pro",
+            format="wav"
+        )
+        save(audio_stream, output_file)
+        return True
+
+    def _generate_via_http_server(self, text, ref_audio, ref_text, output_file):
+        """Génération via le serveur API local Fish Audio (tools/api_server.py)."""
+        import requests
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+            
+        payload = {
+            "text": text,
+            "format": "wav",
+            "streaming": False,
+        }
+        if ref_audio and os.path.exists(ref_audio):
+            try:
+                import base64
+                with open(ref_audio, "rb") as fa:
+                    audio_b64 = base64.b64encode(fa.read()).decode("utf-8")
+                payload["references"] = [{"audio": audio_b64, "text": ref_text or ""}]
+            except Exception as e_ref:
+                self.logger.debug(f"Impossible d'encoder le fichier de référence: {e_ref}")
+
+        response = requests.post(self.api_url, json=payload, headers=headers, timeout=60)
+        if response.status_code == 200:
+            with open(output_file, "wb") as f:
+                f.write(response.content)
+            return True
+        return False
+
+    def generate(self, text, voice, target_lang, output_file, **kwargs):
+        """Synthèse vocale Fish Audio S2-Pro en précision FP16."""
+        # Résolution du nom de voix
+        voice_name = voice.split("/")[-1] if "/" in voice else voice
+        ref_audio, ref_text, ref_txt_path = self.find_reference_materials(voice_name)
+        lang_id = self.get_language_id(target_lang)
+
+        # Seed déterministe pour stabilité absolue du timbre vocal
+        seed = int(kwargs.get("seed", os.getenv("FISH_SEED", 42)))
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        np.random.seed(seed)
+
+        clean_text = text.strip()
+        sample_rate = 44100  # Fréquence haute-fidélité native Fish Audio S2-Pro
+
+        # Micro-silence si texte vide ou composé uniquement de ponctuations
+        if not any(c.isalnum() for c in clean_text):
+            os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
+            silence_arr = np.zeros(int(sample_rate * 0.4), dtype=np.float32)
+            sf.write(output_file, silence_arr, sample_rate)
+            return
+
+        # Ponctuation terminale protectrice pour clore l'auto-régression
+        if clean_text[-1] not in ('.', '!', '?', ':', ';', '…'):
+            clean_text += '.'
+
+        # 1. Priorité A : Clé API Fish Audio Cloud (si configurée)
+        if self.api_key:
+            try:
+                if self._generate_via_sdk(clean_text, ref_audio, output_file):
+                    return
+            except Exception as e_sdk:
+                self.logger.warning(f"Fish Audio SDK API error ({e_sdk}), basculement sur le moteur local...")
+
+        # 2. Priorité B : Serveur API local si actif (ex: sur port 8080)
+        try:
+            if self._generate_via_http_server(clean_text, ref_audio, ref_text, output_file):
+                return
+        except Exception:
+            pass
+
+        # 3. Priorité C : Pipeline local direct en FP16
+        try:
+            model, decoder = self.load_local_model()
+            if model is not None and decoder is not None:
+                from fish_speech.models.text2semantic.inference import generate_long, decode_one_token_ar
+                
+                self.logger.info(f"Fish Audio S2-Pro : Synthèse FP16 de '{clean_text[:40]}...'")
+                
+                # Encodage ou récupération en cache des tokens acoustiques de référence
+                global FISH_AUDIO_PROMPT_CACHE
+                prompt_tokens = FISH_AUDIO_PROMPT_CACHE.get(ref_audio)
+                if prompt_tokens is None and hasattr(decoder, "encode"):
+                    with torch.no_grad():
+                        audio_data, sr = sf.read(ref_audio)
+                        if len(audio_data.shape) > 1:
+                            audio_data = audio_data.mean(axis=1)
+                        audio_tensor = torch.tensor(audio_data, dtype=torch.float32, device=self.device).unsqueeze(0).unsqueeze(0)
+                        prompt_tokens = decoder.encode(audio_tensor)
+                        FISH_AUDIO_PROMPT_CACHE[ref_audio] = prompt_tokens
+
+                # Génération des codes sémantiques Dual-AR en FP16
+                with torch.inference_mode():
+                    with torch.autocast(device_type="cuda", dtype=self.dtype) if self.device == "cuda" else torch.no_grad():
+                        codes = generate_long(
+                            model=model,
+                            device=self.device,
+                            decode_one_token=decode_one_token_ar,
+                            text=clean_text,
+                            prompt_text=ref_text or "",
+                            prompt_tokens=prompt_tokens,
+                            num_samples=1,
+                            max_new_tokens=int(kwargs.get("max_new_tokens", 1024)),
+                            top_p=float(kwargs.get("top_p", 0.7)),
+                            temperature=float(kwargs.get("temperature", 0.7)),
+                            repetition_penalty=float(kwargs.get("repetition_penalty", 1.2)),
+                        )
+                        
+                        # Décodage des codes vers le signal audio via DAC
+                        if hasattr(decoder, "decode"):
+                            wav = decoder.decode(codes)
+                        else:
+                            wav = decoder(codes)
+                            
+                        wav_out = wav.squeeze().cpu().numpy().astype(np.float32)
+
+                # Normalisation anti-clipping
+                if wav_out is not None and getattr(wav_out, "size", len(wav_out)) > 0:
+                    max_val = float(np.abs(wav_out).max())
+                    if max_val > 1.0:
+                        wav_out = wav_out / max_val * 0.98
+                    os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
+                    sf.write(output_file, wav_out, sample_rate)
+                    return
+        except Exception as e_local:
+            self.logger.error(f"Fish Audio Local FP16 Generation Error: {str(e_local)}")
+
+        # 4. Filet de sécurité anti-crash (silence propre)
+        self.logger.warning(f"Fish Audio : Création d'un segment de sécurité pour '{clean_text[:30]}'")
+        os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
+        seg_duration = kwargs.get("seg_duration", 1.0) or 1.0
+        silence_arr = np.zeros(int(sample_rate * float(seg_duration)), dtype=np.float32)
+        sf.write(output_file, silence_arr, sample_rate)

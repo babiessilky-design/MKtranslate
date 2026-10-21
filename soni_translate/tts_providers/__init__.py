@@ -2,7 +2,8 @@ from .custom import CustomCloningProvider
 
 # Enregistrement de nos Providers actifs
 PROVIDERS_REGISTRY = {
-    "Custom": CustomCloningProvider()
+    "Custom": CustomCloningProvider(),
+    "FishAudio": None,  # Lazy loaded if needed
 }
 
 def get_provider(voice_name):
