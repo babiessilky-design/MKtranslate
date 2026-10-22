@@ -1400,9 +1400,23 @@ class SoniTranslate(SoniTrCache):
                         logger.error(str(error))
 
             if transcriber_model == "Gemini 3.5 Transcribe":
-                prog_disp("Diarization complete (Gemini Native)", 0.60, is_gui, progress=progress)
-                self.result_diarize = reencode_speakers(copy.deepcopy(self.result), max_speakers=max_speakers)
-                logger.info("Diarisation Pyannote court-circuitée : locuteurs déjà assignés nativement par Gemini.")
+                detected_spks = set(seg.get("speaker") for seg in self.result.get("segments", []) if seg.get("speaker"))
+                if len(detected_spks) > 1 or max_speakers == 1 or diarization_model == "disable" or not YOUR_HF_TOKEN:
+                    prog_disp("Diarization complete (Gemini Native)", 0.60, is_gui, progress=progress)
+                    self.result_diarize = reencode_speakers(copy.deepcopy(self.result), max_speakers=max_speakers)
+                    logger.info(f"Diarisation Pyannote court-circuitée : locuteurs déjà assignés nativement par Gemini ({len(detected_spks)} locuteur(s) : {detected_spks}).")
+                else:
+                    logger.warning(f"Gemini n'a renvoyé qu'un seul locuteur ({detected_spks}) alors que {max_speakers} étaient attendus. Bascule de sécurité vers la diarisation Pyannote...")
+                    prog_disp("Diarizing (Pyannote Fallback)...", 0.60, is_gui, progress=progress)
+                    diarize_model_select = diarization_models[diarization_model]
+                    self.result_diarize = diarize_speech(
+                        base_audio_wav if not self.vocals else self.vocals,
+                        self.result,
+                        min_speakers,
+                        max_speakers,
+                        YOUR_HF_TOKEN,
+                        diarize_model_select,
+                    )
             else:
                 if not self.task_in_cache("diarize", [
                     min_speakers,

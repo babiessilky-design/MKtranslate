@@ -248,7 +248,7 @@ def gemini_translate(segments, target, source=None, mode="flash"):
     if mode == "pro":
         candidates = ["gemini-3.1-pro-preview", "gemini-3.1-pro"]
     else:
-        candidates = ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.7-flash"]
+        candidates = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.7-flash"]
 
     # Prompt système dynamique par langue
     sys_prompt = get_system_prompt(target)

@@ -303,7 +303,7 @@ def parse_gemini_transcription(text_resp, default_lang="en", audio_duration=None
 def gemini_api_transcribe(
     input_audio_file,
     source_lang=None,
-    model_name="gemini-3.5-transcribe",
+    model_name="gemini-3.8-flash",
     max_speakers=None,
 ):
     """
@@ -360,33 +360,40 @@ def gemini_api_transcribe(
                 for m in client.models.list():
                     m_name = getattr(m, "name", "") or ""
                     clean_m = m_name.replace("models/", "")
-                    if "2.0" not in clean_m:
+                    if not any(bad in clean_m for bad in ["1.0", "1.5", "2.0", "2.5"]):
                         available_api_models.append(clean_m)
         except Exception as e_list:
             logger.debug(f"Impossible de lister les modèles API ({e_list})")
 
-        # Modèles avec 'transcribe' d'abord, puis les modèles flash en fallback
-        transcribe_api_models = [m for m in available_api_models if "transcribe" in m.lower() and "2.0" not in m]
-        flash_api_models = [m for m in available_api_models if "flash" in m.lower() and "transcribe" not in m.lower() and "2.0" not in m]
+        flash_api_models = [m for m in available_api_models if "flash" in m.lower() and "transcribe" not in m.lower()]
+        pro_api_models = [m for m in available_api_models if "pro" in m.lower() and "transcribe" not in m.lower()]
+        transcribe_api_models = [m for m in available_api_models if "transcribe" in m.lower()]
 
         candidate_models = []
         if os.environ.get("GEMINI_TRANSCRIBE_MODEL"):
             candidate_models.append(os.environ["GEMINI_TRANSCRIBE_MODEL"])
+
+        # Priorité absolue aux modèles multimodaux de dernière génération (Gemini 3.x)
+        # recommandés officiellement par Google et capables d'une diarisation native précise
         candidate_models.extend([
-            "gemini-2.5-flash",
-            "gemini-2.5-pro",
-            "gemini-1.5-flash",
-            "gemini-1.5-pro",
-            "gemini-3.5-transcribe",
             "gemini-3.8-flash",
+            "gemini-3.6-flash",
+            "gemini-3.1-pro-preview",
+            "gemini-3.5-flash",
             "gemini-3.7-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-pro",
         ])
-        candidate_models.extend(transcribe_api_models)
         candidate_models.extend(flash_api_models)
+        candidate_models.extend(pro_api_models)
+        # Les modèles purement ASR (sans diarisation) ne sont qu'un ultime recours
+        candidate_models.extend(transcribe_api_models)
+        if "gemini-3.5-transcribe" not in candidate_models:
+            candidate_models.append("gemini-3.5-transcribe")
 
         unique_models = []
         for m in candidate_models:
-            if m and m not in unique_models and "2.0" not in m:
+            if m and m not in unique_models and not any(bad in m for bad in ["1.0", "1.5", "2.0", "2.5"]):
                 unique_models.append(m)
 
         lang_instruction = (
@@ -460,8 +467,11 @@ CRITICAL RULES:
 }}"""
 
         response = None
+        best_segments = None
+        best_lang = None
+        fallback_segments = None
+        fallback_lang = None
         last_error = None
-        response_text = ""
 
         def extract_text(resp):
             if not resp:
@@ -485,64 +495,65 @@ CRITICAL RULES:
                 logger.info(f"Gemini Transcribe : Tentative avec le modèle '{mod}'...")
                 response_text = ""
 
-                # 1. Priorité absolue : Interactions API (Recommandé officiellement par Google pour gemini-3.8-flash)
-                if hasattr(client, "interactions") and hasattr(client.interactions, "create"):
+                # 1. Requête avec contrainte JSON stricte pour garantir timestamps et speaker tags
+                try:
+                    config = types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=0.1,
+                    )
+                    response = client.models.generate_content(
+                        model=mod,
+                        contents=[uploaded_file, prompt],
+                        config=config
+                    )
+                    response_text = extract_text(response)
+                except Exception as err_json:
+                    logger.debug(f"Mode JSON refusé pour '{mod}' ({err_json}), tentative sans config JSON...")
                     try:
-                        inter_input = [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "audio",
-                                "uri": getattr(uploaded_file, "uri", None) or getattr(uploaded_file, "name", None),
-                                "mime_type": getattr(uploaded_file, "mime_type", "audio/wav") or "audio/wav",
-                            }
-                        ]
-                        interaction = client.interactions.create(
+                        response = client.models.generate_content(
                             model=mod,
-                            input=inter_input
+                            contents=[uploaded_file, prompt]
                         )
-                        response_text = extract_text(interaction)
-                    except Exception as err_inter:
-                        logger.debug(f"Interactions API non disponible pour '{mod}' ({err_inter}), essai generate_content...")
-
-                # 2. Repli : client.models.generate_content
-                if not response_text.strip():
-                    if "transcribe" in mod.lower():
-                        # Modèle dédié de transcription (mode audio direct)
-                        logger.info(f"Mode audio direct pour '{mod}'...")
-                        try:
-                            response = client.models.generate_content(
-                                model=mod,
-                                contents=[uploaded_file, prompt]
-                            )
-                        except Exception as err_prompt:
-                            logger.warning(f"Appel avec prompt sur '{mod}' a échoué ({err_prompt}), tentative audio seul...")
+                        response_text = extract_text(response)
+                    except Exception as err_no_json:
+                        if "transcribe" in mod.lower():
+                            logger.info(f"Mode direct audio pour '{mod}'...")
                             response = client.models.generate_content(
                                 model=mod,
                                 contents=[uploaded_file]
                             )
-                    else:
-                        # Modèles multimodaux généraux (gemini-3.8-flash, etc.)
-                        try:
-                            config = types.GenerateContentConfig(
-                                response_mime_type="application/json",
-                                temperature=0.1,
-                            )
-                            response = client.models.generate_content(
-                                model=mod,
-                                contents=[uploaded_file, prompt],
-                                config=config
-                            )
-                        except Exception as err_json:
-                            logger.warning(f"Mode JSON refusé pour '{mod}' ({err_json}), tentative sans config JSON...")
-                            response = client.models.generate_content(
-                                model=mod,
-                                contents=[uploaded_file, prompt]
-                            )
-                    response_text = extract_text(response)
+                            response_text = extract_text(response)
+                        else:
+                            raise err_no_json
 
-                if response_text.strip():
-                    logger.info(f"Gemini Transcribe : Succès avec le modèle '{mod}' !")
-                    break
+                text_clean = response_text.strip()
+                if text_clean:
+                    parsed_segs, det_lang = parse_gemini_transcription(
+                        text_clean,
+                        default_lang=source_lang or "en",
+                        audio_duration=audio_duration,
+                        max_speakers=max_spk,
+                    )
+                    if parsed_segs:
+                        is_structured = (
+                            '"segments"' in text_clean or 
+                            '"speaker"' in text_clean or 
+                            re.search(r'\d+:\d+.*SPEAKER', text_clean, re.IGNORECASE) is not None
+                        )
+                        detected_spks = set(s.get("speaker") for s in parsed_segs if s.get("speaker"))
+                        
+                        if is_structured:
+                            logger.info(f"Gemini Transcribe : Succès avec le modèle '{mod}' ! ({len(parsed_segs)} segments, locuteur(s) détecté(s): {detected_spks})")
+                            best_segments = parsed_segs
+                            best_lang = det_lang
+                            break
+                        else:
+                            logger.warning(f"Modèle '{mod}' a renvoyé du texte brut sans diarisation. Recherche d'un modèle supérieur...")
+                            if fallback_segments is None:
+                                fallback_segments = parsed_segs
+                                fallback_lang = det_lang
+                    else:
+                        logger.warning(f"Modèle '{mod}' : réponse reçue mais aucun segment valide extrait.")
                 else:
                     logger.warning(f"Modèle '{mod}' a renvoyé une réponse vide.")
 
@@ -550,15 +561,15 @@ CRITICAL RULES:
                 logger.warning(f"Modèle '{mod}' indisponible ({e}). Bascule sur le modèle suivant...")
                 last_error = e
 
-        if not response_text.strip():
+        if best_segments is not None:
+            formatted_segments = best_segments
+            detected_lang = best_lang
+        elif fallback_segments is not None:
+            logger.info("Utilisation des segments de secours issus du texte brut...")
+            formatted_segments = fallback_segments
+            detected_lang = fallback_lang
+        else:
             raise RuntimeError(f"Échec de la transcription Gemini sur tous les modèles: {last_error}")
-
-        formatted_segments, detected_lang = parse_gemini_transcription(
-            response_text,
-            default_lang=source_lang or "en",
-            audio_duration=audio_duration,
-            max_speakers=max_spk,
-        )
 
         if not formatted_segments:
             raise ValueError(f"Impossible d'extraire des segments de la réponse Gemini. Réponse brute: {response_text[:300]}")
