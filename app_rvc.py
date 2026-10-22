@@ -1348,13 +1348,11 @@ class SoniTranslate(SoniTrCache):
                 )
 
                 self.align_language = self.result["language"]
-                if transcriber_model == "Gemini 3.5 Transcribe":
-                    logger.info("Alignement phonétique ignoré : Gemini fournit déjà des horodatages précis.")
-                elif (
+                if (
                     not subtitle_file
                     or text_segmentation_scale in ["word", "character"]
                 ):
-                    prog_disp("Aligning...", 0.45, is_gui, progress=progress)
+                    prog_disp("Aligning (Wav2Vec2 millisecond precision)...", 0.45, is_gui, progress=progress)
                     try:
                         if self.align_language in ["vi"]:
                             logger.info(
@@ -1364,18 +1362,34 @@ class SoniTranslate(SoniTrCache):
                                 "duration of the segments as an alternative."
                             )
                         else:
+                            # Sauvegarder les locuteurs avant alignement phonétique Wav2Vec2
+                            backup_segments = copy.deepcopy(self.result.get("segments", []))
                             self.result = align_speech(audio, self.result)
-                            logger.debug(
-                                "Align complete, "
-                                f"segments count {len(self.result['segments'])}"
+                            # Réinjecter / préserver les locuteurs sur chaque segment aligné
+                            aligned_segs = self.result.get("segments", [])
+                            for idx, s in enumerate(aligned_segs):
+                                if not s.get("speaker"):
+                                    if idx < len(backup_segments) and backup_segments[idx].get("speaker"):
+                                        s["speaker"] = backup_segments[idx]["speaker"]
+                                    else:
+                                        # Calage temporel par chevauchement
+                                        s_mid = (float(s.get("start", 0)) + float(s.get("end", 0))) / 2.0
+                                        matched_spk = "SPEAKER_00"
+                                        for orig in backup_segments:
+                                            if float(orig.get("start", 0)) <= s_mid <= float(orig.get("end", 0)):
+                                                matched_spk = orig.get("speaker", "SPEAKER_00")
+                                                break
+                                        s["speaker"] = matched_spk
+                            logger.info(
+                                f"Alignement phonétique Wav2Vec2 réussi : {len(aligned_segs)} segments recalés à la milliseconde."
                             )
                     except Exception as error:
-                        logger.error(str(error))
+                        logger.warning(f"Alignement phonétique ignoré ({error}), conservation des horodatages directs.")
 
             if self.result["segments"] == []:
                 raise ValueError("No active speech found in audio")
 
-            if transcriber_model != "Gemini 3.5 Transcribe" and not self.task_in_cache("break_align", [
+            if not self.task_in_cache("break_align", [
                 divide_text_segments_by,
                 text_segmentation_scale,
                 self.align_language

@@ -869,7 +869,7 @@ def break_aling_segments(
     # create new with filters
     normal = []
 
-    def process_chars(chars, letter_new_start, num, text):
+    def process_chars(chars, letter_new_start, num, text, speaker="SPEAKER_00"):
         start_key, end_key = "start", "end"
         start_value = end_value = None
 
@@ -893,11 +893,13 @@ def break_aling_segments(
             "end": end_value,
             "text": text,
             "words": chars,
+            "speaker": speaker,
         }
 
     for i, segment in enumerate(result_align['segments']):
 
         logger.debug(f"- Process segment: {i}, text: {segment['text']}")
+        seg_spk = segment.get("speaker", "SPEAKER_00")
         # start = segment['start']
         letter_new_start = 0
         for num, char in enumerate(segment['chars']):
@@ -937,7 +939,7 @@ def break_aling_segments(
                     continue
 
                 # logger.debug(chars)
-                normal_dict = process_chars(chars, letter_new_start, num, text)
+                normal_dict = process_chars(chars, letter_new_start, num, text, speaker=seg_spk)
 
                 letter_new_start = num+1
 
@@ -964,7 +966,7 @@ def break_aling_segments(
 
                 chars = segment['chars'][letter_new_start:num+1]
 
-                normal_dict = process_chars(chars, letter_new_start, num, text)
+                normal_dict = process_chars(chars, letter_new_start, num, text, speaker=seg_spk)
 
                 letter_new_start = num+1
 
