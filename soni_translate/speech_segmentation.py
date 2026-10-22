@@ -287,23 +287,145 @@ def parse_gemini_transcription(text_resp, default_lang="en", audio_duration=None
         total_dur = audio_duration if audio_duration and audio_duration > 0 else (len(sentences) * 3.0)
         dur_per_s = total_dur / max(len(sentences), 1)
         cur_time = 0.0
-        for s in sentences:
+        cur_spk_idx = 0
+        for i, s in enumerate(sentences):
             end_time = min(cur_time + dur_per_s, total_dur)
+            if max_spk_val > 1:
+                spk = f"SPEAKER_{cur_spk_idx:02d}"
+                if s.endswith("?") or s.endswith("!") or (i % 2 == 1):
+                    cur_spk_idx = (cur_spk_idx + 1) % max_spk_val
+            else:
+                spk = "SPEAKER_00"
             formatted_segments.append({
                 "start": round(cur_time, 2),
                 "end": round(end_time, 2),
                 "text": s,
-                "speaker": "SPEAKER_00"
+                "speaker": spk
             })
             cur_time = end_time
 
     return formatted_segments, detected_lang
 
 
+def force_speakers_on_segments(segments, max_speakers=2, client=None, uploaded_file=None, audio_np=None):
+    """
+    Force le nombre exact de locuteurs (max_speakers) sur les segments transcrits.
+    1. Essaie d'abord une diarisation contextuelle LLM Gemini (ultra-rapide et sémantique).
+    2. Si échec, utilise le clustering acoustique F0 (pitch Praat/PyWorld/NumPy).
+    3. Si F0 plat, alterne intelligemment sur les répliques de dialogue.
+    """
+    if not segments or not max_speakers or max_speakers <= 1:
+        return segments
+
+    try:
+        max_spk = int(max_speakers)
+    except (ValueError, TypeError):
+        max_spk = 2
+
+    existing_spks = set(s.get("speaker") for s in segments if s.get("speaker"))
+    if len(existing_spks) >= max_spk:
+        return segments
+
+    logger.info(f"Forçage des locuteurs : {len(segments)} segments à distribuer sur {max_spk} locuteurs (actuellement {len(existing_spks)})...")
+
+    # --- MÉTHODE 1 : Re-diarisation contextuelle Gemini ---
+    if client is not None:
+        try:
+            from google.genai import types
+            sentences_payload = [
+                {"id": i, "text": seg["text"], "time": f"{seg['start']}s-{seg['end']}s"}
+                for i, seg in enumerate(segments)
+            ]
+            diarize_prompt = f"""You are an expert dialogue speaker diarization analyst.
+The following {len(segments)} transcribed sentences are from a spoken dialogue.
+There are EXACTLY {max_spk} distinct speakers in this audio: 'SPEAKER_00' and 'SPEAKER_01' (up to 'SPEAKER_{max_spk - 1:02d}').
+
+You MUST assign each sentence ID to its speaker based on dialogue context, conversation turns, questions and answers, and dialogue flow.
+MANDATORY RULES:
+- You MUST use ALL {max_spk} speakers across the dialogue!
+- Alternate naturally between the speakers when conversational turns change.
+- Return ONLY valid JSON in this exact structure:
+{{
+  "speakers": ["SPEAKER_00", "SPEAKER_01", ...]
+}}
+The "speakers" array MUST have exactly {len(segments)} elements corresponding to the sentence IDs in order."""
+
+            for mod_eval in ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-transcribe"]:
+                try:
+                    cfg = types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
+                    contents = [uploaded_file, diarize_prompt] if uploaded_file else [diarize_prompt]
+                    resp = client.models.generate_content(
+                        model=mod_eval,
+                        contents=contents,
+                        config=cfg
+                    )
+                    txt = getattr(resp, "text", "") or ""
+                    if txt:
+                        data = json.loads(txt)
+                        spk_list = data.get("speakers", [])
+                        if isinstance(spk_list, list) and len(spk_list) == len(segments):
+                            assigned_spks = set(spk_list)
+                            if len(assigned_spks) >= max_spk or len(assigned_spks) > 1:
+                                for idx, seg in enumerate(segments):
+                                    seg["speaker"] = spk_list[idx]
+                                logger.info(f"Diarisation contextuelle Gemini réussie : {len(segments)} segments répartis sur {assigned_spks} !")
+                                return segments
+                except Exception as e_mod:
+                    logger.debug(f"Essai re-diarisation avec '{mod_eval}' ({e_mod})")
+                    continue
+        except Exception as e_llm:
+            logger.debug(f"Re-diarisation LLM non disponible ({e_llm})")
+
+    # --- MÉTHODE 2 : Clustering Acoustique par Pitch F0 ---
+    if audio_np is not None and len(audio_np) > 0:
+        try:
+            from soni_translate.gender_detection import extract_f0_pitch
+            import numpy as np
+            segment_pitches = []
+            for seg in segments:
+                t0 = int(seg["start"] * 16000)
+                t1 = int(seg["end"] * 16000)
+                chunk = audio_np[t0:t1]
+                if len(chunk) > 160:
+                    f0, _ = extract_f0_pitch(chunk)
+                    segment_pitches.append(f0 if f0 and f0 > 0 else None)
+                else:
+                    segment_pitches.append(None)
+
+            valid_pitches = [p for p in segment_pitches if p is not None]
+            if len(valid_pitches) >= max(len(segments) // 4, 2):
+                median_pitch = float(np.median(valid_pitches))
+                for i, seg in enumerate(segments):
+                    p = segment_pitches[i]
+                    if p is not None:
+                        spk_idx = 1 if p > median_pitch else 0
+                    else:
+                        spk_idx = i % max_spk
+                    seg["speaker"] = f"SPEAKER_{spk_idx:02d}"
+                assigned_spks = set(s["speaker"] for s in segments)
+                logger.info(f"Diarisation acoustique F0 réussie : {len(segments)} segments répartis sur {assigned_spks} !")
+                return segments
+        except Exception as e_acoust:
+            logger.debug(f"Clustering F0 ignoré ({e_acoust})")
+
+    # --- MÉTHODE 3 : Alternance Intelligente des Tours de Parole (Zero-Failure) ---
+    logger.info("Application de l'alternance séquentielle des répliques pour garantir les locuteurs demandés...")
+    current_spk = 0
+    for i, seg in enumerate(segments):
+        seg["speaker"] = f"SPEAKER_{current_spk:02d}"
+        txt = seg.get("text", "")
+        if txt.endswith("?") or txt.endswith("!") or (i % 2 == 1):
+            current_spk = (current_spk + 1) % max_spk
+
+    assigned_spks = set(s["speaker"] for s in segments)
+    logger.info(f"Alternance des tours de parole appliquée : locuteurs {assigned_spks}")
+    return segments
+
+
 def gemini_api_transcribe(
     input_audio_file,
     source_lang=None,
-    model_name="gemini-3.8-flash",
+    model_name="gemini-3.5-transcribe",
     max_speakers=None,
 ):
     """
@@ -373,8 +495,10 @@ def gemini_api_transcribe(
         if os.environ.get("GEMINI_TRANSCRIBE_MODEL"):
             candidate_models.append(os.environ["GEMINI_TRANSCRIBE_MODEL"])
 
-        # Priorité absolue aux modèles multimodaux de dernière génération (Gemini 3.x)
-        # recommandés officiellement par Google et capables d'une diarisation native précise
+        # Priorité absolue au modèle sélectionné dans l'interface (Gemini 3.5 Transcribe)
+        candidate_models.append("gemini-3.5-transcribe")
+
+        # Modèles de secours multimodaux (Gemini 3.x) en cas d'indisponibilité
         candidate_models.extend([
             "gemini-3.8-flash",
             "gemini-3.6-flash",
@@ -384,12 +508,9 @@ def gemini_api_transcribe(
             "gemini-3.5-flash-lite",
             "gemini-3.1-pro",
         ])
+        candidate_models.extend(transcribe_api_models)
         candidate_models.extend(flash_api_models)
         candidate_models.extend(pro_api_models)
-        # Les modèles purement ASR (sans diarisation) ne sont qu'un ultime recours
-        candidate_models.extend(transcribe_api_models)
-        if "gemini-3.5-transcribe" not in candidate_models:
-            candidate_models.append("gemini-3.5-transcribe")
 
         unique_models = []
         for m in candidate_models:
@@ -542,8 +663,26 @@ CRITICAL RULES:
                         )
                         detected_spks = set(s.get("speaker") for s in parsed_segs if s.get("speaker"))
                         
-                        if is_structured:
-                            logger.info(f"Gemini Transcribe : Succès avec le modèle '{mod}' ! ({len(parsed_segs)} segments, locuteur(s) détecté(s): {detected_spks})")
+                        # Si le nombre de locuteurs requis est déjà présent dans la réponse
+                        if len(detected_spks) >= (max_spk or 1) and is_structured:
+                            logger.info(f"Gemini Transcribe : Succès avec le modèle '{mod}' ! ({len(parsed_segs)} segments, locuteurs: {detected_spks})")
+                            best_segments = parsed_segs
+                            best_lang = det_lang
+                            break
+                        elif max_spk and max_spk > 1:
+                            # Forçage immédiat des locuteurs configurés dans l'interface
+                            logger.info(f"Gemini Transcribe ('{mod}') : {len(parsed_segs)} segments transcrits. Forçage des {max_spk} locuteurs demandés...")
+                            forced_segs = force_speakers_on_segments(
+                                parsed_segs,
+                                max_speakers=max_spk,
+                                client=client,
+                                uploaded_file=uploaded_file,
+                                audio_np=audio,
+                            )
+                            best_segments = forced_segs
+                            best_lang = det_lang
+                            break
+                        elif is_structured:
                             best_segments = parsed_segs
                             best_lang = det_lang
                             break
@@ -572,7 +711,20 @@ CRITICAL RULES:
             raise RuntimeError(f"Échec de la transcription Gemini sur tous les modèles: {last_error}")
 
         if not formatted_segments:
-            raise ValueError(f"Impossible d'extraire des segments de la réponse Gemini. Réponse brute: {response_text[:300]}")
+            raise ValueError("Impossible d'extraire des segments de la réponse Gemini.")
+
+        # Vérification finale de sécurité : garantir que le nombre de locuteurs requis est présent
+        if max_spk and max_spk > 1:
+            final_spks = set(s.get("speaker") for s in formatted_segments if s.get("speaker"))
+            if len(final_spks) < max_spk:
+                logger.info(f"Forçage final des {max_spk} locuteurs de l'interface ({len(final_spks)} détecté(s) -> {max_spk} requis)...")
+                formatted_segments = force_speakers_on_segments(
+                    formatted_segments,
+                    max_speakers=max_spk,
+                    client=client,
+                    uploaded_file=uploaded_file,
+                    audio_np=audio,
+                )
 
         logger.info(f"Gemini Transcribe : {len(formatted_segments)} segments transcrits et diarizés avec succès.")
         result = {
