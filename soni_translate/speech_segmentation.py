@@ -599,16 +599,35 @@ CRITICAL RULES:
                 return ""
             if isinstance(resp, str):
                 return resp
-            if hasattr(resp, "output_text") and resp.output_text:
-                return resp.output_text
-            if hasattr(resp, "text") and resp.text:
-                return resp.text
+
+            # 1. Extraction prioritaire depuis les parts (gère text ET audio_transcription spécifique à gemini-3.5-transcribe)
             if hasattr(resp, "candidates") and resp.candidates:
                 cand = resp.candidates[0]
                 if hasattr(cand, "content") and hasattr(cand.content, "parts"):
-                    parts = [p.text for p in cand.content.parts if hasattr(p, "text") and p.text]
-                    if parts:
-                        return "\n".join(parts)
+                    extracted = []
+                    for p in cand.content.parts:
+                        # Texte direct
+                        txt_val = getattr(p, "text", None)
+                        if txt_val and isinstance(txt_val, str) and txt_val.strip():
+                            extracted.append(txt_val.strip())
+                        # Transcription audio dédiée (spécifique à gemini-3.5-transcribe)
+                        at_val = getattr(p, "audio_transcription", None)
+                        if at_val:
+                            sub_text = getattr(at_val, "text", "") or getattr(at_val, "transcription", "") or str(at_val)
+                            if sub_text and sub_text.strip():
+                                extracted.append(sub_text.strip())
+                    if extracted:
+                        return "\n".join(extracted)
+
+            if hasattr(resp, "output_text") and resp.output_text:
+                return resp.output_text
+
+            try:
+                if hasattr(resp, "text") and resp.text:
+                    return resp.text
+            except Exception:
+                pass
+
             return ""
 
         for mod in unique_models:
