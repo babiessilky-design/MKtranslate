@@ -862,21 +862,79 @@ def transcribe_speech(
         asr_model = model_dir
         logger.info(f"ASR Model: {str(model_dir)}")
 
-    model = whisperx.load_model(
-        asr_model,
-        os.environ.get("SONITR_DEVICE"),
-        compute_type=compute_type,
-        language=SOURCE_LANGUAGE,
-        asr_options=asr_options,
-    )
+    device = os.environ.get("SONITR_DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
+
+    # Nettoyage préventif agressif de la mémoire pour éviter les crashs OOM ctranslate2
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    model = None
+    fallback_computes = [compute_type]
+    if "cuda" in str(device).lower():
+        if compute_type != "int8_float16":
+            fallback_computes.append("int8_float16")
+        if compute_type != "int8":
+            fallback_computes.append("int8")
+
+    load_error = None
+    for c_type in fallback_computes:
+        try:
+            logger.info(f"Chargement de Whisper ({asr_model}) sur {device} [compute_type={c_type}]...")
+            model = whisperx.load_model(
+                asr_model,
+                device,
+                compute_type=c_type,
+                language=SOURCE_LANGUAGE,
+                asr_options=asr_options,
+            )
+            break
+        except Exception as e_load:
+            load_error = e_load
+            if "out of memory" in str(e_load).lower() or "cuda failed" in str(e_load).lower():
+                logger.warning(f"VRAM insuffisante avec compute_type='{c_type}'. Libération mémoire et essai de quantification plus légère...")
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            else:
+                raise e_load
+
+    if model is None:
+        logger.warning(f"Impossible d'allouer Whisper sur GPU ({load_error}). Bascule de secours sur CPU [compute_type=int8]...")
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        model = whisperx.load_model(
+            asr_model,
+            "cpu",
+            compute_type="int8",
+            language=SOURCE_LANGUAGE,
+            asr_options=asr_options,
+        )
 
     audio = whisperx.load_audio(audio_wav)
-    result = model.transcribe(
-        audio,
-        batch_size=batch_size,
-        chunk_size=segment_duration_limit,
-        print_progress=True,
-    )
+
+    # Transcription résiliente contre les erreurs de mémoire par réduction dynamique du batch_size
+    result = None
+    cur_batch = batch_size
+    while cur_batch >= 1:
+        try:
+            result = model.transcribe(
+                audio,
+                batch_size=cur_batch,
+                chunk_size=segment_duration_limit,
+                print_progress=True,
+            )
+            break
+        except Exception as e_trans:
+            if ("out of memory" in str(e_trans).lower() or "cuda failed" in str(e_trans).lower()) and cur_batch > 1:
+                cur_batch = max(1, cur_batch // 2)
+                logger.warning(f"Mémoire saturée pendant la transcription. Réduction de batch_size à {cur_batch} et réessai...")
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            else:
+                raise e_trans
 
     if result["language"] == "zh" and not prompt:
         result["language"] = "zh-TW"
@@ -884,29 +942,14 @@ def transcribe_speech(
 
     del model
     gc.collect()
-    torch.cuda.empty_cache()  # noqa
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     return audio, result
 
 
 def align_speech(audio, result):
     """
     Aligns speech segments based on the provided audio and result metadata.
-
-    Parameters:
-    - audio (array): The audio data in a suitable format for alignment.
-    - result (dict): Metadata containing information about the segments
-         and language.
-
-    Returns:
-    - result (dict): Updated metadata after aligning the segments with
-        the audio. This includes character-level alignments if
-        'return_char_alignments' is set to True.
-
-    Notes:
-    - This function uses language-specific models to align speech segments.
-    - It performs language compatibility checks and selects the
-        appropriate alignment model.
-    - Cleans up memory by releasing resources after alignment.
     """
     DAMHF.update(DAMT)  # lang align
     if (
@@ -935,25 +978,64 @@ def align_speech(audio, result):
         )
         return result
 
-    model_a, metadata = whisperx.load_align_model(
-        language_code=result["language"],
-        device=os.environ.get("SONITR_DEVICE"),
-        model_name=None
-        if result["language"] in DAMHF.keys()
-        else EXTRA_ALIGN[result["language"]],
-    )
-    result = whisperx.align(
-        result["segments"],
-        model_a,
-        metadata,
-        audio,
-        os.environ.get("SONITR_DEVICE"),
-        return_char_alignments=True,
-        print_progress=False,
-    )
-    del model_a
+    align_device = os.environ.get("SONITR_DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
     gc.collect()
-    torch.cuda.empty_cache()  # noqa
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    model_a = None
+    try:
+        model_a, metadata = whisperx.load_align_model(
+            language_code=result["language"],
+            device=align_device,
+            model_name=None
+            if result["language"] in DAMHF.keys()
+            else EXTRA_ALIGN[result["language"]],
+        )
+        result = whisperx.align(
+            result["segments"],
+            model_a,
+            metadata,
+            audio,
+            align_device,
+            return_char_alignments=True,
+            print_progress=False,
+        )
+    except Exception as e_align:
+        if ("out of memory" in str(e_align).lower() or "cuda failed" in str(e_align).lower()) and "cuda" in str(align_device).lower():
+            logger.warning(f"VRAM insuffisante pour l'alignement Wav2Vec2 sur GPU ({e_align}). Bascule automatique de secours sur CPU...")
+            if model_a is not None:
+                del model_a
+                model_a = None
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            model_a, metadata = whisperx.load_align_model(
+                language_code=result["language"],
+                device="cpu",
+                model_name=None
+                if result["language"] in DAMHF.keys()
+                else EXTRA_ALIGN[result["language"]],
+            )
+            result = whisperx.align(
+                result["segments"],
+                model_a,
+                metadata,
+                audio,
+                "cpu",
+                return_char_alignments=True,
+                print_progress=False,
+            )
+        else:
+            raise e_align
+    finally:
+        if model_a is not None:
+            del model_a
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
     return result
 
 
