@@ -1248,8 +1248,12 @@ def refine_diarization_and_speakers(audio_wav, result, max_speakers=None):
             f0_j = speaker_profiles[root_j].get("f0")
             pitch_diff = abs(f0_i - f0_j) if (f0_i and f0_j) else 999.0
 
-            # Critère de ressemblance : forte similarité cosinus ou similarité modérée avec pitch identique
-            is_same_speaker = cos_sim >= 0.88 or (cos_sim >= 0.82 and pitch_diff <= 12.0)
+            # Si le nombre de locuteurs correspond déjà à max_speakers (ex: 2 demandés et 2 trouvés),
+            # on ne fusionne que si c'est rigoureusement la même voix (seuil ultra-strict)
+            if max_spk_val > 0 and len(spk_keys) <= max_spk_val:
+                is_same_speaker = cos_sim >= 0.94 and pitch_diff <= 6.0
+            else:
+                is_same_speaker = cos_sim >= 0.90 or (cos_sim >= 0.86 and pitch_diff <= 8.0)
             if is_same_speaker:
                 # On conserve celui qui a le temps de parole le plus long
                 if speaker_profiles[root_i]["duration"] >= speaker_profiles[root_j]["duration"]:
@@ -1427,9 +1431,44 @@ def diarize_speech(
             audio_wav, min_speakers=min_speakers, max_speakers=max_speakers
         )
 
+        raw_speakers = []
+        try:
+            if hasattr(diarize_segments, "speaker"):
+                raw_speakers = list(set(diarize_segments["speaker"]))
+            elif hasattr(diarize_segments, "itertracks"):
+                raw_speakers = list(set(track[2] for track in diarize_segments.itertracks(yield_label=True)))
+            logger.info(f"Pyannote 3.1 brut : {len(raw_speakers)} locuteur(s) détecté(s) -> {raw_speakers}")
+        except Exception as e_raw:
+            logger.debug(f"Diag raw speakers ({e_raw})")
+
         result_diarize = whisperx.assign_word_speakers(
             diarize_segments, result
         )
+
+        # Rattrapage direct par intersection temporelle si assign_word_speakers a perdu des locuteurs
+        assigned_spks = set(s.get("speaker") for s in result_diarize.get("segments", []) if s.get("speaker"))
+        if len(assigned_spks) <= 1 and len(raw_speakers) > 1 and hasattr(diarize_segments, "iterrows"):
+            logger.warning(
+                f"assign_word_speakers n'a assigné qu'un seul locuteur ({assigned_spks}) alors que Pyannote en a trouvé {len(raw_speakers)}. "
+                "Recalage direct par intersection temporelle des segments..."
+            )
+            for seg in result_diarize.get("segments", []):
+                s_start = float(seg.get("start", 0))
+                s_end = float(seg.get("end", 0))
+                best_spk = seg.get("speaker", "SPEAKER_00")
+                best_overlap = 0.0
+
+                for _, row in diarize_segments.iterrows():
+                    d_start = float(row.get("start", 0))
+                    d_end = float(row.get("end", 0))
+                    d_spk = row.get("speaker", "SPEAKER_00")
+                    overlap = max(0.0, min(s_end, d_end) - max(s_start, d_start))
+                    if overlap > best_overlap:
+                        best_overlap = overlap
+                        best_spk = d_spk
+                seg["speaker"] = best_spk
+            assigned_spks = set(s.get("speaker") for s in result_diarize.get("segments", []) if s.get("speaker"))
+            logger.info(f"Après recalage temporel : {len(assigned_spks)} locuteur(s) assignés -> {assigned_spks}")
 
         for segment in result_diarize["segments"]:
             if "speaker" not in segment:

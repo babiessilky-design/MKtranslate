@@ -1043,14 +1043,13 @@ class SoniTranslate(SoniTrCache):
         os.environ["GEMINI_TTS_MODEL"] = gemini_tts_model
         os.environ["CUSTOM_CLONING_ENGINE"] = custom_cloning_engine
         os.environ["MAX_SPEAKERS"] = str(max_speakers)
-        # Configuration saine des locuteurs : respect du min_speakers réel (ou 1 par défaut)
-        try:
-            min_spk_val = int(min_speakers) if min_speakers is not None else 1
-        except (ValueError, TypeError):
-            min_spk_val = 1
-        min_speakers = max(1, min_spk_val)
-        if max_speakers is not None and max_speakers < min_speakers:
+        # Configuration des locuteurs : forcer min_speakers = max_speakers quand l'utilisateur demande 2+ locuteurs
+        # afin que le clustering Pyannote ne s'arrête pas prématurément à 1 seul locuteur
+        if max_speakers is not None and max_speakers > 1:
             min_speakers = max_speakers
+            logger.info(f"Auto-Sync Speakers: min_speakers forcé à {min_speakers} (sur max_speakers={max_speakers})")
+        else:
+            min_speakers = 1
         logger.info(f"Paramètres Diarisation : min_speakers={min_speakers}, max_speakers={max_speakers}")
         
         if not YOUR_HF_TOKEN:
