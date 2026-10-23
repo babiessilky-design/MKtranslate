@@ -1097,14 +1097,38 @@ def extract_acoustic_signature(audio_np, sample_rate=16000):
     return vec, f0
 
 
-def smooth_speaker_fragmentation(segments, min_duration=1.2, max_gap=1.2):
+def get_segment_pitch(audio_np, start_sec, end_sec, sample_rate=16000):
     """
-    Lissage temporel des sauts de locuteurs (anti-fragmentation / anti-ping-pong).
+    Extrait la fréquence fondamentale (F0 en Hz) d'un segment audio précis.
+    """
+    if audio_np is None or len(audio_np) == 0:
+        return None, 0.0
+    try:
+        t0 = max(0, int(float(start_sec) * sample_rate))
+        t1 = min(len(audio_np), int(float(end_sec) * sample_rate))
+        # Au moins 0.12s (1920 échantillons à 16kHz)
+        if t1 - t0 < int(sample_rate * 0.12):
+            return None, 0.0
+        chunk = audio_np[t0:t1]
+        from soni_translate.gender_detection import extract_f0_pitch
+        return extract_f0_pitch(chunk, sample_rate)
+    except Exception:
+        return None, 0.0
+
+
+def smooth_speaker_fragmentation(segments, min_duration=0.9, max_gap=1.2, audio_np=None, sample_rate=16000, speaker_pitches=None):
+    """
+    Lissage temporel intelligent et acoustique des sauts de locuteurs (anti-fragmentation / anti-ping-pong).
     Si un court segment (< min_duration) est entouré par le même locuteur avant et après,
-    il est réassigné à ce locuteur pour éliminer les micro-sauts intempestifs.
+    on vérifie son pitch acoustique (F0) avant toute réassignation :
+    - Si le pitch du segment correspond à sa voix actuelle (ex: réplique courte d'une femme au milieu d'un homme),
+      il est STRICTEMENT PROTÉGÉ et NON RÉASSIGNÉ.
+    - S'il n'y a pas de contradiction acoustique ou si c'est un artefact court, il est réassigné.
     """
     if len(segments) < 3:
         return segments
+
+    speaker_pitches = speaker_pitches or {}
 
     for _ in range(2):
         changed = False
@@ -1119,12 +1143,31 @@ def smooth_speaker_fragmentation(segments, min_duration=1.2, max_gap=1.2):
                 gap2 = float(segments[i + 1].get("start", 0)) - float(segments[i].get("end", 0))
 
                 if dur < min_duration and gap1 < max_gap and gap2 < max_gap:
-                    logger.info(
-                        f"Post-Diarisation Anti-Fragmentation : Segment {i} ({dur:.2f}s) "
-                        f"réassigné de '{s_curr}' à '{s_prev}' (lissage temporel)."
-                    )
-                    segments[i]["speaker"] = s_prev
-                    changed = True
+                    # Protection acoustique : vérification du pitch F0
+                    p_curr = speaker_pitches.get(s_curr)
+                    p_prev = speaker_pitches.get(s_prev)
+                    
+                    protect_segment = False
+                    if audio_np is not None and p_curr and p_prev and abs(p_curr - p_prev) >= 25.0:
+                        seg_f0, voiced_ratio = get_segment_pitch(
+                            audio_np, segments[i].get("start", 0), segments[i].get("end", 0), sample_rate
+                        )
+                        if seg_f0 and voiced_ratio >= 0.15:
+                            # Si le pitch est plus proche du locuteur actuel que du locuteur entourant
+                            if abs(seg_f0 - p_curr) < abs(seg_f0 - p_prev):
+                                protect_segment = True
+                                logger.info(
+                                    f"Post-Diarisation : Segment {i} ({dur:.2f}s, Pitch {seg_f0:.1f}Hz) "
+                                    f"protégé pour '{s_curr}' contre absorption par '{s_prev}' (voix distincte confirmée acoustiquement)."
+                                )
+
+                    if not protect_segment:
+                        logger.info(
+                            f"Post-Diarisation Anti-Fragmentation : Segment {i} ({dur:.2f}s) "
+                            f"réassigné de '{s_curr}' à '{s_prev}' (lissage temporel)."
+                        )
+                        segments[i]["speaker"] = s_prev
+                        changed = True
         if not changed:
             break
 
@@ -1134,12 +1177,14 @@ def smooth_speaker_fragmentation(segments, min_duration=1.2, max_gap=1.2):
 def refine_diarization_and_speakers(audio_wav, result, max_speakers=None):
     """
     Post-traitement avancé et robuste de la diarisation :
-    1. Lissage anti-fragmentation (anti-ping-pong).
-    2. Comparaison acoustique indépendante par empreintes vocales (MFCC/F0/Spectral).
-    3. Fusion automatique des locuteurs acoustiquement identiques (anti-overclustering).
-    4. Élimination des faux locuteurs parasites (toux, bruits courts).
-    5. Classement des locuteurs par temps de parole réel (SPEAKER_00 = personnage principal).
-    6. Attribution intelligente des locuteurs excédentaires au locuteur le plus ressemblant.
+    1. Chargement de l'audio 16kHz mono.
+    2. Extraction des profils acoustiques initiaux (MFCC + Pitch F0) par locuteur.
+    3. Fusion des voix acoustiquement identiques (anti-overclustering).
+    4. Élimination des faux locuteurs parasites (toux, bruits < 0.8s).
+    5. Lissage temporel intelligent avec protection acoustique de pitch F0.
+    6. Sauvetage Acoustique F0 des segments (rescue homme/femme per-segment).
+    7. Classement des locuteurs par temps de parole réel (SPEAKER_00 = personnage principal).
+    8. Attribution des locuteurs excédentaires au profil le plus ressemblant.
     """
     import numpy as np
     if max_speakers is None:
@@ -1162,10 +1207,7 @@ def refine_diarization_and_speakers(audio_wav, result, max_speakers=None):
             s["speaker"] = "SPEAKER_00"
         return result
 
-    # 1. Lissage anti-fragmentation (Micro-sauts de locuteurs)
-    segments = smooth_speaker_fragmentation(segments, min_duration=1.2, max_gap=1.2)
-
-    # 2. Chargement de l'audio en 16kHz mono pour comparaison acoustique indépendante
+    # 1. Chargement de l'audio en 16kHz mono pour comparaison acoustique et F0
     audio_np = None
     sample_rate = 16000
     if audio_wav and os.path.exists(audio_wav):
@@ -1187,7 +1229,7 @@ def refine_diarization_and_speakers(audio_wav, result, max_speakers=None):
         except Exception as e_aud:
             logger.warning(f"Audio non lisible pour comparaison acoustique ({e_aud}), poursuite sans empreintes.")
 
-    # 3. Extraction des profils acoustiques par locuteur
+    # 2. Extraction des profils acoustiques par locuteur (MFCC, Pitch F0)
     speaker_segments = {}
     speaker_durations = {}
     for s in segments:
@@ -1232,7 +1274,7 @@ def refine_diarization_and_speakers(audio_wav, result, max_speakers=None):
         if speaker_profiles:
             logger.info(f"Analyse Acoustique : {len(speaker_profiles)} profil(s) vocal(aux) extrait(s) (MFCC/Pitch/Timbre).")
 
-    # 4. Comparaison indépendante des voix & Fusion automatique des clusters similaires (Anti-Overclustering)
+    # 3. Comparaison indépendante des voix & Fusion automatique des clusters similaires (Anti-Overclustering)
     merged_into = {}
     spk_keys = list(speaker_profiles.keys())
     for i in range(len(spk_keys)):
@@ -1251,14 +1293,11 @@ def refine_diarization_and_speakers(audio_wav, result, max_speakers=None):
             f0_j = speaker_profiles[root_j].get("f0")
             pitch_diff = abs(f0_i - f0_j) if (f0_i and f0_j) else 999.0
 
-            # Si le nombre de locuteurs correspond déjà à max_speakers (ex: 2 demandés et 2 trouvés),
-            # on ne fusionne que si c'est rigoureusement la même voix (seuil ultra-strict)
             if max_spk_val > 0 and len(spk_keys) <= max_spk_val:
                 is_same_speaker = cos_sim >= 0.94 and pitch_diff <= 6.0
             else:
                 is_same_speaker = cos_sim >= 0.90 or (cos_sim >= 0.86 and pitch_diff <= 8.0)
             if is_same_speaker:
-                # On conserve celui qui a le temps de parole le plus long
                 if speaker_profiles[root_i]["duration"] >= speaker_profiles[root_j]["duration"]:
                     target, absorbed = root_i, root_j
                 else:
@@ -1276,7 +1315,6 @@ def refine_diarization_and_speakers(audio_wav, result, max_speakers=None):
                     f"Similarité = {cos_sim:.2f}, Écart Pitch = {pitch_info} -> Deux voix distinctes confirmées."
                 )
 
-    # Application des fusions acoustiques
     if merged_into:
         for s in segments:
             cur_spk = s.get("speaker", "SPEAKER_00")
@@ -1284,7 +1322,7 @@ def refine_diarization_and_speakers(audio_wav, result, max_speakers=None):
                 cur_spk = merged_into[cur_spk]
             s["speaker"] = cur_spk
 
-    # 5. Élimination des micro-locuteurs parasites (bruits ou toux isolées < 0.8s)
+    # 4. Élimination des micro-locuteurs parasites (bruits ou toux isolées < 0.8s)
     speaker_durations.clear()
     total_speech_time = 0.0
     for s in segments:
@@ -1303,19 +1341,70 @@ def refine_diarization_and_speakers(audio_wav, result, max_speakers=None):
             logger.info(f"Élimination des locuteurs parasites/bruits : {ghost_speakers}")
             for i, s in enumerate(segments):
                 if s.get("speaker") in ghost_speakers:
-                    # Raccrocher au locuteur précédent ou suivant
                     fallback_spk = None
                     if i > 0 and segments[i - 1].get("speaker") not in ghost_speakers:
                         fallback_spk = segments[i - 1].get("speaker")
                     elif i < len(segments) - 1 and segments[i + 1].get("speaker") not in ghost_speakers:
                         fallback_spk = segments[i + 1].get("speaker")
                     else:
-                        # Locuteur avec la plus grande durée
                         fallback_spk = max((k for k in speaker_durations if k not in ghost_speakers), key=lambda k: speaker_durations[k])
                     s["speaker"] = fallback_spk
 
-    # 6. Deuxième passe de lissage temporel après fusions
-    segments = smooth_speaker_fragmentation(segments, min_duration=1.0, max_gap=1.0)
+    # Dictionnaire des pitchs de référence par locuteur
+    speaker_pitches = {spk: prof.get("f0") for spk, prof in speaker_profiles.items() if prof.get("f0")}
+
+    # 5. Lissage anti-fragmentation avec protection acoustique de pitch F0
+    segments = smooth_speaker_fragmentation(
+        segments, min_duration=0.9, max_gap=1.2, audio_np=audio_np, sample_rate=sample_rate, speaker_pitches=speaker_pitches
+    )
+
+    # 6. Sauvetage Acoustique F0 des segments (Per-segment pitch rescue homme/femme)
+    # Si deux locuteurs ont un pitch clairement contrasté (écart >= 30Hz, ex: homme 102Hz vs femme 185Hz)
+    active_spks_with_pitch = [(spk, speaker_pitches[spk]) for spk in speaker_pitches if spk in set(s.get("speaker") for s in segments)]
+    if len(active_spks_with_pitch) >= 2 and audio_np is not None:
+        active_spks_with_pitch.sort(key=lambda x: x[1])
+        low_spk, p_low = active_spks_with_pitch[0]
+        high_spk, p_high = active_spks_with_pitch[-1]
+
+        if (p_high - p_low) >= 30.0:
+            split_pitch = (p_low + p_high) / 2.0
+            margin = min(12.0, (p_high - p_low) * 0.15)
+            high_thresh = split_pitch + margin
+            low_thresh = split_pitch - margin
+            logger.info(
+                f"Sauvetage Acoustique F0 activé entre '{low_spk}' ({p_low:.1f}Hz) et '{high_spk}' ({p_high:.1f}Hz) "
+                f"[Seuils : Homme <= {low_thresh:.1f}Hz | Femme >= {high_thresh:.1f}Hz]"
+            )
+            rescue_count = 0
+            for i, seg in enumerate(segments):
+                s_start = float(seg.get("start", 0))
+                s_end = float(seg.get("end", 0))
+                dur = s_end - s_start
+                if dur < 0.20:
+                    continue
+                seg_f0, voiced_ratio = get_segment_pitch(audio_np, s_start, s_end, sample_rate)
+                if not seg_f0 or voiced_ratio < 0.15:
+                    continue
+
+                cur_spk = seg.get("speaker")
+                # Si attribué au locuteur grave (homme) alors que la voix est aiguë (femme)
+                if cur_spk == low_spk and seg_f0 >= high_thresh:
+                    seg["speaker"] = high_spk
+                    rescue_count += 1
+                    logger.info(
+                        f"Sauvetage Acoustique F0 : Segment {i} ({dur:.2f}s, {seg_f0:.1f}Hz) "
+                        f"réassigné de '{low_spk}' -> '{high_spk}' (Voix féminine confirmée par pitch F0)."
+                    )
+                # Si attribué au locuteur aigu (femme) alors que la voix est grave (homme)
+                elif cur_spk == high_spk and seg_f0 <= low_thresh:
+                    seg["speaker"] = low_spk
+                    rescue_count += 1
+                    logger.info(
+                        f"Sauvetage Acoustique F0 : Segment {i} ({dur:.2f}s, {seg_f0:.1f}Hz) "
+                        f"réassigné de '{high_spk}' -> '{low_spk}' (Voix masculine confirmée par pitch F0)."
+                    )
+            if rescue_count > 0:
+                logger.info(f"Sauvetage Acoustique F0 terminé : {rescue_count} segment(s) restauré(s) avec succès.")
 
     # 7. Classement par temps de parole réel (SPEAKER_00 = voix principale)
     final_durations = {}
