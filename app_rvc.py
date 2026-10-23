@@ -310,7 +310,9 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
             v_low.startswith("chatterbox/") or
             v_low.startswith("omnivoice/") or
             v_low.startswith("fishaudio/") or
-            v_low.startswith("fish_audio/")
+            v_low.startswith("fish_audio/") or
+            v_low.startswith("fish/") or
+            "fish" in v_low
         )
 
     def sanitize_tts_text(t, is_fish=False):
@@ -319,7 +321,7 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
         import re
 
         fish_placeholders = {}
-        tag_regex = r'\[\s*(?:whisper|laughing|angry|excited|sad|surprised|sigh|crying|pause)\s*\]'
+        tag_regex = r'\[\s*(?:whisper|laughing|angry|excited|sad|surprised|sigh|crying|pause|calm)\s*\]'
         if is_fish:
             def save_tag(m):
                 idx = len(fish_placeholders)
@@ -379,7 +381,7 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
     import copy
     clean_diarize = copy.deepcopy(result_diarize)
     for s_clean in clean_diarize.get("segments", []):
-        s_clean["text"] = re.sub(r'\[\s*(?:whisper|laughing|angry|excited|sad|surprised|sigh|crying|pause)\s*\]', '', s_clean.get("text", ""), flags=re.IGNORECASE).strip()
+        s_clean["text"] = re.sub(r'\[\s*(?:whisper|laughing|angry|excited|sad|surprised|sigh|crying|pause|calm)\s*\]', '', s_clean.get("text", ""), flags=re.IGNORECASE).strip()
     original_audio_segmentation_to_voice(clean_diarize, TRANSLATE_AUDIO_TO, is_gui, *args, **kwargs)
     
     # --------------------------------------------------------------------------
@@ -428,7 +430,8 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
             continue
         
         # --- ETAPE A : VERIFICATION DU CACHE PERSISTANT (MD5 HASH) ---
-        unique_string = f"{text}_{voice}_{TRANSLATE_AUDIO_TO}_speed1.0"
+        fish_emo_flag = os.getenv("FISH_AUTO_EMOTION", "False")
+        unique_string = f"{text}_{voice}_{TRANSLATE_AUDIO_TO}_speed1.0_{fish_emo_flag}"
         segment_hash = hashlib.md5(unique_string.encode("utf-8")).hexdigest()
         cache_file_path = os.path.join(persistent_cache_dir, f"{segment_hash}.ogg")
         
@@ -1487,7 +1490,8 @@ class SoniTranslate(SoniTrCache):
 
             if not self.task_in_cache("translate", [
                 TRANSLATE_AUDIO_TO,
-                translate_process
+                translate_process,
+                auto_emotion_fish
             ], {
                 "result_diarize": self.result_diarize
             }):
@@ -1642,7 +1646,9 @@ class SoniTranslate(SoniTrCache):
             tts_voice09,
             tts_voice10,
             tts_voice11,
-            dereverb_automatic_xtts
+            dereverb_automatic_xtts,
+            auto_detect_gender,
+            auto_emotion_fish
         ], {
             "sub_file": self.sub_file
         }):

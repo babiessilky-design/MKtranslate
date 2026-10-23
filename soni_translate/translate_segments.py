@@ -56,20 +56,28 @@ def get_system_prompt(target_lang):
     """Génère un prompt dynamique adapté à la langue cible choisie par l'utilisateur."""
     is_fish_emotion = os.getenv("FISH_AUTO_EMOTION", "False").lower() in ["true", "1", "yes"]
 
-    emotion_instruction = ""
     if is_fish_emotion:
-        emotion_instruction = """
-7. DIRECTIVE ÉMOTIONS ET JEU D'ACTEUR (FISH AUDIO) :
-Analyse le ton, la ponctuation et le contexte expressif de chaque réplique originale.
-Lorsque la scène ou la réplique exprime clairement une émotion spécifique, insère judicieusement au début de la traduction (ou juste avant le mot-clé) l'une des balises d'émotions reconnues par Fish Audio :
-- [laughing] si le personnage rit, ricane ou s'amuse (« Haha », rire, blague évidente).
-- [whisper] si le personnage chuchote, parle tout bas ou confie un secret (« Chut », ton mystérieux).
-- [angry] si le personnage est en colère, hurle, s'énerve ou profère une menace véhémente.
-- [excited] si le personnage est très excité, euphorique, enthousiaste ou émerveillé.
-- [sad] si le personnage est triste, déçu, abattu ou sanglote.
-- [surprised] si le personnage est stupéfait, sous le choc (« Quoi ?! », « Incroyable ! »).
-- [sigh] si le personnage pousse un soupir (exaspération, fatigue ou soulagement).
-RÈGLE D'OR : N'invente pas d'émotion si la réplique est neutre, calme ou factuelle. Utilise ces balises avec modération pour sublimer le réalisme et l'expressivité dramatique."""
+        return f"""Tu es un traducteur expert en doublage vidéo dynamique pour YouTube et le cinéma.
+
+RÈGLES OBLIGATOIRES :
+1. Traduis chaque ligne fidèlement VERS LA LANGUE SUIVANTE : {target_lang}.
+2. Le style doit être naturel, fluide, dynamique et parlé (adapté à un public jeune).
+3. Conserve impérativement le sens exact, les nuances affectives et le tutoiement/langage familier si applicable.
+4. Traduis TOUTES les phrases sans exception.
+5. DIRECTIVE OBLIGATOIRE ÉMOTIONS ET JEU D'ACTEUR (FISH AUDIO) :
+Pour CHAQUE réplique expressive, insère impérativement au tout début la balise d'émotion Fish Audio correspondante parmi :
+- [excited] pour toute phrase dynamique, enthousiaste, joyeuse ou avec un point d'exclamation (ex: [excited] Regarde ce qu'on a trouvé !)
+- [laughing] pour tout rire, réplique amusante, blague ou amusement (ex: [laughing] C'est trop drôle haha !)
+- [whisper] pour tout chuchotement, confidence, secret ou voix basse (ex: [whisper] Chut, fais pas de bruit...)
+- [angry] pour toute réplique énervée, cri, dispute, ordre sec ou tension (ex: [angry] Arrête tout de suite !)
+- [surprised] pour toute surprise, question choquée ou stupéfaction (ex: [surprised] Quoi ?! Tu es sérieux ?)
+- [sad] pour toute tristesse, regret, désolation ou compassion (ex: [sad] C'est vraiment triste...)
+- [sigh] pour un soupir, un soulagement ou de la fatigue (ex: [sigh] Ouf, enfin réussi...)
+- [calm] pour une explication calme, posée ou rassurante
+Laisse sans balise uniquement les énoncés factuels sans aucune charge affective.
+6. Renvoie STRICTEMENT un tableau JSON de chaînes de caractères.
+Exemple :
+["[excited] C'est incroyable, on a enfin réussi !", "[whisper] Fais attention, ils nous cherchent...", "[surprised] Attends, tu plaisantes ?"]"""
 
     return f"""Tu es un traducteur expert en doublage vidéo pour YouTube.
 
@@ -81,7 +89,7 @@ RÈGLES OBLIGATOIRES :
 5. Traduis TOUTES les phrases sans exception.
 6. Renvoie la traduction STRICTEMENT sous forme d'un tableau JSON de chaînes de caractères.
 Exemple :
-["Traduction 1", "Traduction 2", "Traduction 3"]{emotion_instruction}"""
+["Traduction 1", "Traduction 2", "Traduction 3"]"""
 
 # ==============================================================================
 # FILTRE ANTI-PAGE D'ERREUR SERVEUR
@@ -446,31 +454,65 @@ def gpt_batch(segments, model, target, token_batch_limit=900, source=None):
 # ==============================================================================
 def apply_rule_based_emotions(segments):
     """
-    Rattrapage automatique d'émotions pour Fish Audio :
-    Détecte les rires, chuchotements et exclamations évidentes si aucune balise LLM n'a été insérée.
+    Rattrapage et enrichissement automatique d'émotions pour Fish Audio :
+    Analyse sémantique et ponctuation pour garantir que chaque réplique expressive
+    possède une balise d'émotion reconnue par Fish Audio.
     """
     import re
-    laugh_regex = re.compile(r'\b(haha+|héhé+|hihi+|mdr|lol|ptdr|ahah+)\b', re.IGNORECASE)
-    whisper_regex = re.compile(r'\b(chut|psst|silence|tout bas|en secret)\b', re.IGNORECASE)
-    angry_regex = re.compile(r'(!{2,}|\?{2,}|!\?|\?!)\s*$', re.IGNORECASE)
+    valid_tags_pattern = re.compile(
+        r'\[\s*(?:whisper|laughing|angry|excited|sad|surprised|sigh|crying|pause|calm)\s*\]', 
+        re.IGNORECASE
+    )
 
-    for seg in segments:
-        text = seg.get("text", "")
+    laugh_patterns = re.compile(r'\b(haha+|héhé+|hihi+|mdr|lol|ptdr|ahah+|marrant|drôle|rigole|blague|fou rire|hilarious|funny|joke)\b', re.IGNORECASE)
+    whisper_patterns = re.compile(r'\b(chut|psst|silence|tout bas|en secret|discrètement|baisse d\'un ton|pas un mot|whisper|hush|quietly|shh)\b', re.IGNORECASE)
+    angry_patterns = re.compile(r'\b(merde|putain|bordel|fais chier|dégage|ferme[- ]la|tais[- ]toi|idiot|crétin|imbécile|enfoiré|stop|arrête|fous le camp|colère|hurle|damn|fuck|shit|shut up)\b', re.IGNORECASE)
+    surprised_patterns = re.compile(r'(\?!|!\?|\b(quoi\s*\?|comment\s*\?|attends quoi|impossible|sérieux\s*\?|vraiment\s*\?|c\'est pas vrai|non\s*\?|incroyable|ouah|wow|omg|mon dieu|what\s*\?|no way|seriously)\b)', re.IGNORECASE)
+    sad_patterns = re.compile(r'\b(triste|malheureusement|hélas|désolé|pardon|pauvre|pleure|sanglot|larme|douleur|douloureux|horrible|adieu|sad|sorry|crying|painful|grief)\b', re.IGNORECASE)
+    sigh_patterns = re.compile(r'\b(ouf|pff+|enfin|soulagement|fatigué|marre|j\'en peux plus|ras le bol|sigh|finally|exhausted)\b', re.IGNORECASE)
+    excited_patterns = re.compile(r'\b(génial|super|fantastique|magnifique|trop bien|let\'s go|on y va|regarde|viens voir|victoire|bravo|dingue|extraordinaire|succès|champion|yes|awesome|amazing|hurray|look at)\b', re.IGNORECASE)
+
+    tagged_count = 0
+    for idx, seg in enumerate(segments):
+        text = seg.get("text", "").strip()
         if not text:
             continue
-        # Ne rien modifier si une balise existe déjà
-        if re.search(r'\[\s*(?:whisper|laughing|angry|excited|sad|surprised|sigh|crying|pause)\s*\]', text, re.IGNORECASE):
+        
+        # Si une balise valide est déjà présente (mise par le LLM), on la conserve
+        if valid_tags_pattern.search(text):
+            tagged_count += 1
+            logger.info(f"[Auto-Emotion] Segment {idx} (LLM) : '{text}'")
             continue
 
-        if laugh_regex.search(text):
-            seg["text"] = f"[laughing] {text}"
-        elif whisper_regex.search(text):
-            seg["text"] = f"[whisper] {text}"
-        elif angry_regex.search(text) and len(text) > 4 and text.isupper():
-            seg["text"] = f"[angry] {text}"
-        elif "?!" in text or "!?" in text:
-            seg["text"] = f"[surprised] {text}"
+        chosen_tag = None
+        # Priorité 1 : Rires
+        if laugh_patterns.search(text):
+            chosen_tag = "[laughing]"
+        # Priorité 2 : Chuchotements
+        elif whisper_patterns.search(text):
+            chosen_tag = "[whisper]"
+        # Priorité 3 : Colère / Tension
+        elif angry_patterns.search(text) or (text.endswith("!!") and len(text) > 3):
+            chosen_tag = "[angry]"
+        # Priorité 4 : Surprise / Choc
+        elif surprised_patterns.search(text):
+            chosen_tag = "[surprised]"
+        # Priorité 5 : Tristesse
+        elif sad_patterns.search(text):
+            chosen_tag = "[sad]"
+        # Priorité 6 : Soupir / Soulagement
+        elif sigh_patterns.search(text):
+            chosen_tag = "[sigh]"
+        # Priorité 7 : Enthousiasme / Joie (ou toute phrase se terminant par '!')
+        elif excited_patterns.search(text) or text.endswith("!"):
+            chosen_tag = "[excited]"
+        
+        if chosen_tag:
+            seg["text"] = f"{chosen_tag} {text}"
+            tagged_count += 1
+            logger.info(f"[Auto-Emotion] Segment {idx} enrichi avec {chosen_tag} : '{seg['text']}'")
 
+    logger.info(f"[Auto-Emotion] Total segments enrichis avec succès : {tagged_count}/{len(segments)}")
     return segments
 
 
