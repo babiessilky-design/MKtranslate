@@ -313,10 +313,24 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
             v_low.startswith("fish_audio/")
         )
 
-    def sanitize_tts_text(t):
+    def sanitize_tts_text(t, is_fish=False):
         if not t:
             return ""
         import re
+
+        fish_placeholders = {}
+        tag_regex = r'\[\s*(?:whisper|laughing|angry|excited|sad|surprised|sigh|crying|pause)\s*\]'
+        if is_fish:
+            def save_tag(m):
+                idx = len(fish_placeholders)
+                key = f"__FISHTAG_{idx}__"
+                fish_placeholders[key] = m.group(0).lower().replace(" ", "")
+                return f" {key} "
+            t = re.sub(tag_regex, save_tag, t, flags=re.IGNORECASE)
+        else:
+            # Pour toute autre voix que Fish Audio, on élimine la balise pour ne pas la lire à voix haute
+            t = re.sub(tag_regex, ' ', t, flags=re.IGNORECASE)
+
         # 1. Ne supprimer que les bruitages / indications sceniques explicites
         noise_pattern = r'\[\s*(?:musique|music|rires|laughter|applause|applaudissements|silence|inaudible|bruit|noise)\s*\]'
         t = re.sub(noise_pattern, ' ', t, flags=re.IGNORECASE)
@@ -340,6 +354,13 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
         # 6. Forcer la ponctuation finale (indispensable pour stopper les modeles autoregressifs)
         if t and t[-1] not in ('.', '!', '?', ':', ';', '…'):
             t += '.'
+
+        # Restauration des balises d'émotions Fish Audio
+        if is_fish and fish_placeholders:
+            for key, orig_tag in fish_placeholders.items():
+                t = t.replace(key, orig_tag)
+            t = re.sub(r'\s+', ' ', t).strip()
+
         return t
 
     # On regarde si au moins une voix "externe/custom" est demandee
@@ -352,9 +373,14 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
     # --------------------------------------------------------------------------
     # ETAPE 1 : ON LANCE D'ABORD LA GENERATION ORIGINALE EN UN SEUL BLOC
     # Cela va vider le dossier 'audio' et generer proprement toutes les voix EdgeTTS de base.
+    # On nettoie au préalable les balises d'émotions pour que les voix EdgeTTS ne les lisent pas.
     # --------------------------------------------------------------------------
     logger.info("Running baseline SoniTranslate TTS generation...")
-    original_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_gui, *args, **kwargs)
+    import copy
+    clean_diarize = copy.deepcopy(result_diarize)
+    for s_clean in clean_diarize.get("segments", []):
+        s_clean["text"] = re.sub(r'\[\s*(?:whisper|laughing|angry|excited|sad|surprised|sigh|crying|pause)\s*\]', '', s_clean.get("text", ""), flags=re.IGNORECASE).strip()
+    original_audio_segmentation_to_voice(clean_diarize, TRANSLATE_AUDIO_TO, is_gui, *args, **kwargs)
     
     # --------------------------------------------------------------------------
     # ETAPE 2 : NOTRE BOUCLE PASSE PAR-DESSUS ET ECRASE AVEC LES VOIX IA CUSTOM
@@ -384,7 +410,11 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
             continue
             
         raw_text = segment.get("text", "").strip()
-        text = sanitize_tts_text(raw_text)
+        v_low = voice.lower()
+        is_fish = any(k in v_low for k in ["fish", "fishaudio"]) or (
+            voice.startswith("Custom/") and "fish" in os.getenv("CUSTOM_CLONING_ENGINE", "").lower()
+        )
+        text = sanitize_tts_text(raw_text, is_fish=is_fish)
         start = segment["start"]
         end = segment.get("end", start + 2.0)
         seg_duration = max(0.4, float(end) - float(start))
@@ -1030,6 +1060,7 @@ class SoniTranslate(SoniTrCache):
         custom_voices=False,
         custom_voices_workers=1,
         auto_detect_gender=False, # <--- DOIT ÊTRE ICI
+        auto_emotion_fish=False,
         default_male_voice="fr-FR-HenriNeural-Male",     # <--- AJOUTE CETTE LIGNE
         default_female_voice="fr-FR-DeniseNeural-Female", # <--- AJOUTE CETTE LIGNE
         gemini_tts_model="gemini-2.5-flash-preview-tts", # <--- AJOUTÉ
@@ -1043,6 +1074,9 @@ class SoniTranslate(SoniTrCache):
         os.environ["GEMINI_TTS_MODEL"] = gemini_tts_model
         os.environ["CUSTOM_CLONING_ENGINE"] = custom_cloning_engine
         os.environ["MAX_SPEAKERS"] = str(max_speakers)
+        os.environ["FISH_AUTO_EMOTION"] = "True" if auto_emotion_fish else "False"
+        if auto_emotion_fish:
+            logger.info("Auto-Emotion Fish Audio: ACTIVÉ pour la traduction et la synthèse.")
         # Configuration des locuteurs : forcer min_speakers = max_speakers quand l'utilisateur demande 2+ locuteurs
         # afin que le clustering Pyannote ne s'arrête pas prématurément à 1 seul locuteur
         if max_speakers is not None and max_speakers > 1:
@@ -2649,6 +2683,11 @@ def create_gui(theme, logs_in_gui=False):
                                 label="Auto-Detect Voice Gender",
                                 info="Détecte automatiquement le genre de chaque voix et lui attribue la voix par défaut sélectionnée ci-dessous."
                             )
+                            auto_emotion_fish_gui = gr.Checkbox(
+                                False,
+                                label="Auto-Emotion (Fish Audio)",
+                                info="Insère automatiquement des balises d'émotions expressives ([laughing], [whisper], [angry], etc.) lors de la traduction pour Fish Audio."
+                            )
                             default_male_voice_gui = gr.Dropdown(
                                 choices=SoniTr.tts_info.tts_list(),
                                 value="fr-FR-HenriNeural-Male",
@@ -3404,6 +3443,7 @@ def create_gui(theme, logs_in_gui=False):
                 enable_custom_voice,
                 workers_custom_voice,
                 auto_detect_gender_gui,
+                auto_emotion_fish_gui,
                 default_male_voice_gui,   # <--- AJOUTE CETTE LIGNE
                 default_female_voice_gui, # <--- AJOUTE CETTE LIGNE
                 gemini_tts_model_gui,     # <--- AJOUTÉ
@@ -3476,6 +3516,7 @@ def create_gui(theme, logs_in_gui=False):
                 enable_custom_voice,
                 workers_custom_voice,
                 auto_detect_gender_gui,
+                auto_emotion_fish_gui,
                 default_male_voice_gui,   # <--- AJOUTE CETTE LIGNE
                 default_female_voice_gui, # <--- AJOUTE CETTE LIGNE
                 gemini_tts_model_gui,     # <--- AJOUTÉ

@@ -54,6 +54,23 @@ DOCS_TRANSLATION_PROCESS_OPTIONS = [
 # ==============================================================================
 def get_system_prompt(target_lang):
     """Génère un prompt dynamique adapté à la langue cible choisie par l'utilisateur."""
+    is_fish_emotion = os.getenv("FISH_AUTO_EMOTION", "False").lower() in ["true", "1", "yes"]
+
+    emotion_instruction = ""
+    if is_fish_emotion:
+        emotion_instruction = """
+7. DIRECTIVE ÉMOTIONS ET JEU D'ACTEUR (FISH AUDIO) :
+Analyse le ton, la ponctuation et le contexte expressif de chaque réplique originale.
+Lorsque la scène ou la réplique exprime clairement une émotion spécifique, insère judicieusement au début de la traduction (ou juste avant le mot-clé) l'une des balises d'émotions reconnues par Fish Audio :
+- [laughing] si le personnage rit, ricane ou s'amuse (« Haha », rire, blague évidente).
+- [whisper] si le personnage chuchote, parle tout bas ou confie un secret (« Chut », ton mystérieux).
+- [angry] si le personnage est en colère, hurle, s'énerve ou profère une menace véhémente.
+- [excited] si le personnage est très excité, euphorique, enthousiaste ou émerveillé.
+- [sad] si le personnage est triste, déçu, abattu ou sanglote.
+- [surprised] si le personnage est stupéfait, sous le choc (« Quoi ?! », « Incroyable ! »).
+- [sigh] si le personnage pousse un soupir (exaspération, fatigue ou soulagement).
+RÈGLE D'OR : N'invente pas d'émotion si la réplique est neutre, calme ou factuelle. Utilise ces balises avec modération pour sublimer le réalisme et l'expressivité dramatique."""
+
     return f"""Tu es un traducteur expert en doublage vidéo pour YouTube.
 
 RÈGLES OBLIGATOIRES :
@@ -64,7 +81,7 @@ RÈGLES OBLIGATOIRES :
 5. Traduis TOUTES les phrases sans exception.
 6. Renvoie la traduction STRICTEMENT sous forme d'un tableau JSON de chaînes de caractères.
 Exemple :
-["Traduction 1", "Traduction 2", "Traduction 3"]"""
+["Traduction 1", "Traduction 2", "Traduction 3"]{emotion_instruction}"""
 
 # ==============================================================================
 # FILTRE ANTI-PAGE D'ERREUR SERVEUR
@@ -427,6 +444,37 @@ def gpt_batch(segments, model, target, token_batch_limit=900, source=None):
     return translate_iterative(segments, target, source)
 
 # ==============================================================================
+def apply_rule_based_emotions(segments):
+    """
+    Rattrapage automatique d'émotions pour Fish Audio :
+    Détecte les rires, chuchotements et exclamations évidentes si aucune balise LLM n'a été insérée.
+    """
+    import re
+    laugh_regex = re.compile(r'\b(haha+|héhé+|hihi+|mdr|lol|ptdr|ahah+)\b', re.IGNORECASE)
+    whisper_regex = re.compile(r'\b(chut|psst|silence|tout bas|en secret)\b', re.IGNORECASE)
+    angry_regex = re.compile(r'(!{2,}|\?{2,}|!\?|\?!)\s*$', re.IGNORECASE)
+
+    for seg in segments:
+        text = seg.get("text", "")
+        if not text:
+            continue
+        # Ne rien modifier si une balise existe déjà
+        if re.search(r'\[\s*(?:whisper|laughing|angry|excited|sad|surprised|sigh|crying|pause)\s*\]', text, re.IGNORECASE):
+            continue
+
+        if laugh_regex.search(text):
+            seg["text"] = f"[laughing] {text}"
+        elif whisper_regex.search(text):
+            seg["text"] = f"[whisper] {text}"
+        elif angry_regex.search(text) and len(text) > 4 and text.isupper():
+            seg["text"] = f"[angry] {text}"
+        elif "?!" in text or "!?" in text:
+            seg["text"] = f"[surprised] {text}"
+
+    return segments
+
+
+# ==============================================================================
 # DISPATCHER PRINCIPAL
 # ==============================================================================
 def translate_text(
@@ -439,22 +487,31 @@ def translate_text(
 ):
     target_clean = fix_code_language(target)
     source_clean = fix_code_language(source) if source else "auto"
+
     match translation_process:
         case "gemini_flash":
-            return gemini_translate(segments, target, source, mode="flash")
+            translated = gemini_translate(segments, target, source, mode="flash")
         case "gemini_pro":
-            return gemini_translate(segments, target, source, mode="pro")
+            translated = gemini_translate(segments, target, source, mode="pro")
         case "groq_llama3":
-            return groq_translate(segments, target, source)
+            translated = groq_translate(segments, target, source)
         case "hf_zephyr_7b_beta":
-            return hf_zephyr_translate(segments, target, source)
+            translated = hf_zephyr_translate(segments, target, source)
         case "google_translator_batch":
-            return translate_batch(segments, target_clean, chunk_size, source_clean)
+            translated = translate_batch(segments, target_clean, chunk_size, source_clean)
         case "google_translator":
-            return translate_iterative(segments, target_clean, source_clean)
+            translated = translate_iterative(segments, target_clean, source_clean)
         case model if "gpt" in model:
-            return translate_iterative(segments, target_clean, source_clean)
+            translated = translate_iterative(segments, target_clean, source_clean)
         case "disable_translation":
-            return segments
+            translated = segments
         case _:
-            return translate_iterative(segments, target_clean, source_clean)
+            translated = translate_iterative(segments, target_clean, source_clean)
+
+    # Enrichissement automatique avec les émotions Fish Audio si l'option est activée
+    is_fish_emotion = os.getenv("FISH_AUTO_EMOTION", "False").lower() in ["true", "1", "yes"]
+    if is_fish_emotion and translated:
+        translated = apply_rule_based_emotions(translated)
+        logger.info("Auto-Emotion Fish Audio: Balises d'émotions appliquées sur les segments traduits.")
+
+    return translated
