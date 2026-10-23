@@ -1229,6 +1229,9 @@ def refine_diarization_and_speakers(audio_wav, result, max_speakers=None):
                     "duration": speaker_durations.get(spk, 0.0),
                 }
 
+        if speaker_profiles:
+            logger.info(f"Analyse Acoustique : {len(speaker_profiles)} profil(s) vocal(aux) extrait(s) (MFCC/Pitch/Timbre).")
+
     # 4. Comparaison indépendante des voix & Fusion automatique des clusters similaires (Anti-Overclustering)
     merged_into = {}
     spk_keys = list(speaker_profiles.keys())
@@ -1265,6 +1268,12 @@ def refine_diarization_and_speakers(audio_wav, result, max_speakers=None):
                 logger.info(
                     f"Comparaison Acoustique Indépendante : Voix '{absorbed}' fusionnée avec '{target}' "
                     f"(Similarité = {cos_sim:.2f}, Écart Pitch = {pitch_diff:.1f}Hz)."
+                )
+            else:
+                pitch_info = f"{pitch_diff:.1f}Hz" if pitch_diff < 900 else "N/A"
+                logger.info(
+                    f"Comparaison Acoustique Indépendante : '{root_i}' vs '{root_j}' -> "
+                    f"Similarité = {cos_sim:.2f}, Écart Pitch = {pitch_info} -> Deux voix distinctes confirmées."
                 )
 
     # Application des fusions acoustiques
