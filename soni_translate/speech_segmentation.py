@@ -5,6 +5,7 @@ from whisperx.alignment import (
 from whisperx.utils import TO_LANGUAGE_CODE
 import whisperx
 import torch
+import numpy as np
 import gc
 import os
 import json
@@ -1051,6 +1052,7 @@ def extract_acoustic_signature(audio_np, sample_rate=16000):
     Extrait une signature acoustique normalisée (timbre, formants MFCC, pitch F0, centroïde spectral)
     d'un extrait de parole.
     """
+    import numpy as np
     if audio_np is None or len(audio_np) < 800:
         return None, None
     peak = float(np.max(np.abs(audio_np)))
@@ -1139,6 +1141,7 @@ def refine_diarization_and_speakers(audio_wav, result, max_speakers=None):
     5. Classement des locuteurs par temps de parole réel (SPEAKER_00 = personnage principal).
     6. Attribution intelligente des locuteurs excédentaires au locuteur le plus ressemblant.
     """
+    import numpy as np
     if max_speakers is None:
         try:
             max_spk_val = int(os.environ.get("MAX_SPEAKERS", 0))
@@ -1168,6 +1171,7 @@ def refine_diarization_and_speakers(audio_wav, result, max_speakers=None):
     if audio_wav and os.path.exists(audio_wav):
         try:
             import soundfile as sf
+            import numpy as np
             audio_data, sr = sf.read(audio_wav)
             if audio_data.ndim > 1:
                 audio_data = np.mean(audio_data, axis=1)
