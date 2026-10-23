@@ -1011,7 +1011,7 @@ class SoniTranslate(SoniTrCache):
         vocal_refinement=False,
         literalize_numbers=True,
         segment_duration_limit=15,
-        diarization_model="pyannote_2.1",
+        diarization_model="pyannote_3.1",
         translate_process="google_translator_batch",
         subtitle_file=None,
         output_type="video (mp4)",
@@ -1043,16 +1043,15 @@ class SoniTranslate(SoniTrCache):
         os.environ["GEMINI_TTS_MODEL"] = gemini_tts_model
         os.environ["CUSTOM_CLONING_ENGINE"] = custom_cloning_engine
         os.environ["MAX_SPEAKERS"] = str(max_speakers)
-        # ======================================================================
-        # SYNCHRONISATION AUTOMATIQUE : MIN_SPEAKERS SUIT MAX_SPEAKERS
-        # Quand l'utilisateur choisit 2 locuteurs, PyAnote est OBLIGÉ d'en trouver 2
-        # ======================================================================
-        if max_speakers > 1:
+        # Configuration saine des locuteurs : respect du min_speakers réel (ou 1 par défaut)
+        try:
+            min_spk_val = int(min_speakers) if min_speakers is not None else 1
+        except (ValueError, TypeError):
+            min_spk_val = 1
+        min_speakers = max(1, min_spk_val)
+        if max_speakers is not None and max_speakers < min_speakers:
             min_speakers = max_speakers
-            logger.info(f"Auto-Sync Speakers: min_speakers set to {min_speakers} (matching max_speakers={max_speakers})")
-        else:
-            min_speakers = 1
-        # ======================================================================
+        logger.info(f"Paramètres Diarisation : min_speakers={min_speakers}, max_speakers={max_speakers}")
         
         if not YOUR_HF_TOKEN:
             YOUR_HF_TOKEN = os.getenv("YOUR_HF_TOKEN")
@@ -2611,7 +2610,7 @@ def create_gui(theme, logs_in_gui=False):
                             )
                             diarization_process_dropdown = gr.Dropdown(
                                 pyannote_models_list,
-                                value=pyannote_models_list[1],
+                                value="pyannote_3.1" if "pyannote_3.1" in pyannote_models_list else pyannote_models_list[0],
                                 label=lg_conf["diarization_label"],
                             )
                             translate_process_dropdown = gr.Dropdown(

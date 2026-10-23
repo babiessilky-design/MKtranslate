@@ -1046,7 +1046,99 @@ diarization_models = {
 }
 
 
-def reencode_speakers(result, max_speakers=None):
+def extract_acoustic_signature(audio_np, sample_rate=16000):
+    """
+    Extrait une signature acoustique normalisée (timbre, formants MFCC, pitch F0, centroïde spectral)
+    d'un extrait de parole.
+    """
+    if audio_np is None or len(audio_np) < 800:
+        return None, None
+    peak = float(np.max(np.abs(audio_np)))
+    if peak < 0.005:
+        return None, None
+    norm_audio = audio_np / peak
+
+    feats = []
+    # 1. MFCC & Timbre spectral
+    try:
+        import librosa
+        mfcc = librosa.feature.mfcc(y=norm_audio, sr=sample_rate, n_mfcc=16)
+        mfcc_mean = np.mean(mfcc, axis=1)
+        spec_cent = np.mean(librosa.feature.spectral_centroid(y=norm_audio, sr=sample_rate))
+        spec_rolloff = np.mean(librosa.feature.spectral_rolloff(y=norm_audio, sr=sample_rate))
+        feats.extend(mfcc_mean.tolist())
+        feats.append(float(spec_cent) / 2000.0)
+        feats.append(float(spec_rolloff) / 4000.0)
+    except Exception:
+        fft_vals = np.abs(np.fft.rfft(norm_audio))
+        freqs = np.fft.rfftfreq(len(norm_audio), 1.0 / sample_rate)
+        bands = np.array_split(fft_vals, 16)
+        feats.extend([float(np.mean(b)) for b in bands])
+        centroid = float(np.sum(freqs * fft_vals) / (np.sum(fft_vals) + 1e-8))
+        feats.append(centroid / 2000.0)
+        feats.append(1.0)
+
+    # 2. Pitch F0 acoustique
+    f0 = None
+    try:
+        from soni_translate.gender_detection import extract_f0_pitch
+        f0, _ = extract_f0_pitch(norm_audio, sample_rate)
+    except Exception:
+        pass
+
+    feats.append((f0 / 250.0) if f0 and f0 > 0 else 0.5)
+
+    vec = np.array(feats, dtype=np.float32)
+    norm = np.linalg.norm(vec)
+    if norm > 1e-6:
+        vec = vec / norm
+    return vec, f0
+
+
+def smooth_speaker_fragmentation(segments, min_duration=1.2, max_gap=1.2):
+    """
+    Lissage temporel des sauts de locuteurs (anti-fragmentation / anti-ping-pong).
+    Si un court segment (< min_duration) est entouré par le même locuteur avant et après,
+    il est réassigné à ce locuteur pour éliminer les micro-sauts intempestifs.
+    """
+    if len(segments) < 3:
+        return segments
+
+    for _ in range(2):
+        changed = False
+        for i in range(1, len(segments) - 1):
+            s_prev = segments[i - 1].get("speaker")
+            s_curr = segments[i].get("speaker")
+            s_next = segments[i + 1].get("speaker")
+
+            if s_prev and s_next and s_prev == s_next and s_curr != s_prev:
+                dur = float(segments[i].get("end", 0)) - float(segments[i].get("start", 0))
+                gap1 = float(segments[i].get("start", 0)) - float(segments[i - 1].get("end", 0))
+                gap2 = float(segments[i + 1].get("start", 0)) - float(segments[i].get("end", 0))
+
+                if dur < min_duration and gap1 < max_gap and gap2 < max_gap:
+                    logger.info(
+                        f"Post-Diarisation Anti-Fragmentation : Segment {i} ({dur:.2f}s) "
+                        f"réassigné de '{s_curr}' à '{s_prev}' (lissage temporel)."
+                    )
+                    segments[i]["speaker"] = s_prev
+                    changed = True
+        if not changed:
+            break
+
+    return segments
+
+
+def refine_diarization_and_speakers(audio_wav, result, max_speakers=None):
+    """
+    Post-traitement avancé et robuste de la diarisation :
+    1. Lissage anti-fragmentation (anti-ping-pong).
+    2. Comparaison acoustique indépendante par empreintes vocales (MFCC/F0/Spectral).
+    3. Fusion automatique des locuteurs acoustiquement identiques (anti-overclustering).
+    4. Élimination des faux locuteurs parasites (toux, bruits courts).
+    5. Classement des locuteurs par temps de parole réel (SPEAKER_00 = personnage principal).
+    6. Attribution intelligente des locuteurs excédentaires au locuteur le plus ressemblant.
+    """
     if max_speakers is None:
         try:
             max_spk_val = int(os.environ.get("MAX_SPEAKERS", 0))
@@ -1058,27 +1150,207 @@ def reencode_speakers(result, max_speakers=None):
         except (ValueError, TypeError):
             max_spk_val = 0
 
+    segments = result.get("segments", [])
+    if not segments:
+        return result
+
+    if max_spk_val == 1:
+        for s in segments:
+            s["speaker"] = "SPEAKER_00"
+        return result
+
+    # 1. Lissage anti-fragmentation (Micro-sauts de locuteurs)
+    segments = smooth_speaker_fragmentation(segments, min_duration=1.2, max_gap=1.2)
+
+    # 2. Chargement de l'audio en 16kHz mono pour comparaison acoustique indépendante
+    audio_np = None
+    sample_rate = 16000
+    if audio_wav and os.path.exists(audio_wav):
+        try:
+            import soundfile as sf
+            audio_data, sr = sf.read(audio_wav)
+            if audio_data.ndim > 1:
+                audio_data = np.mean(audio_data, axis=1)
+            if sr != 16000:
+                try:
+                    import torchaudio
+                    t_wav = torch.from_numpy(audio_data).unsqueeze(0).to(torch.float32)
+                    resample = torchaudio.transforms.Resample(sr, 16000)
+                    audio_data = resample(t_wav).squeeze(0).numpy()
+                except Exception:
+                    pass
+            audio_np = audio_data.astype(np.float32)
+        except Exception as e_aud:
+            logger.warning(f"Audio non lisible pour comparaison acoustique ({e_aud}), poursuite sans empreintes.")
+
+    # 3. Extraction des profils acoustiques par locuteur
+    speaker_segments = {}
+    speaker_durations = {}
+    for s in segments:
+        spk = s.get("speaker", "SPEAKER_00")
+        dur = max(0.0, float(s.get("end", 0)) - float(s.get("start", 0)))
+        speaker_durations[spk] = speaker_durations.get(spk, 0.0) + dur
+        if spk not in speaker_segments:
+            speaker_segments[spk] = []
+        speaker_segments[spk].append(s)
+
+    speaker_profiles = {}
+    if audio_np is not None and len(audio_np) > 1600:
+        total_audio_len = len(audio_np)
+        for spk, seg_list in speaker_segments.items():
+            valid_vecs = []
+            f0_list = []
+            # On privilégie les segments de durée >= 0.4s
+            for s in seg_list:
+                t0 = min(int(float(s.get("start", 0)) * sample_rate), total_audio_len)
+                t1 = min(int(float(s.get("end", 0)) * sample_rate), total_audio_len)
+                if t1 - t0 >= int(sample_rate * 0.4):
+                    chunk = audio_np[t0:t1]
+                    vec, f0 = extract_acoustic_signature(chunk, sample_rate)
+                    if vec is not None:
+                        valid_vecs.append(vec)
+                    if f0 and f0 > 0:
+                        f0_list.append(f0)
+                if len(valid_vecs) >= 8:
+                    break
+
+            if valid_vecs:
+                mean_vec = np.mean(valid_vecs, axis=0)
+                mean_norm = np.linalg.norm(mean_vec)
+                if mean_norm > 1e-6:
+                    mean_vec = mean_vec / mean_norm
+                speaker_profiles[spk] = {
+                    "vector": mean_vec,
+                    "f0": float(np.median(f0_list)) if f0_list else None,
+                    "duration": speaker_durations.get(spk, 0.0),
+                }
+
+    # 4. Comparaison indépendante des voix & Fusion automatique des clusters similaires (Anti-Overclustering)
+    merged_into = {}
+    spk_keys = list(speaker_profiles.keys())
+    for i in range(len(spk_keys)):
+        s_i = spk_keys[i]
+        root_i = merged_into.get(s_i, s_i)
+        for j in range(i + 1, len(spk_keys)):
+            s_j = spk_keys[j]
+            root_j = merged_into.get(s_j, s_j)
+            if root_i == root_j:
+                continue
+
+            v_i = speaker_profiles[root_i]["vector"]
+            v_j = speaker_profiles[root_j]["vector"]
+            cos_sim = float(np.dot(v_i, v_j))
+            f0_i = speaker_profiles[root_i].get("f0")
+            f0_j = speaker_profiles[root_j].get("f0")
+            pitch_diff = abs(f0_i - f0_j) if (f0_i and f0_j) else 999.0
+
+            # Critère de ressemblance : forte similarité cosinus ou similarité modérée avec pitch identique
+            is_same_speaker = cos_sim >= 0.88 or (cos_sim >= 0.82 and pitch_diff <= 12.0)
+            if is_same_speaker:
+                # On conserve celui qui a le temps de parole le plus long
+                if speaker_profiles[root_i]["duration"] >= speaker_profiles[root_j]["duration"]:
+                    target, absorbed = root_i, root_j
+                else:
+                    target, absorbed = root_j, root_i
+
+                merged_into[absorbed] = target
+                logger.info(
+                    f"Comparaison Acoustique Indépendante : Voix '{absorbed}' fusionnée avec '{target}' "
+                    f"(Similarité = {cos_sim:.2f}, Écart Pitch = {pitch_diff:.1f}Hz)."
+                )
+
+    # Application des fusions acoustiques
+    if merged_into:
+        for s in segments:
+            cur_spk = s.get("speaker", "SPEAKER_00")
+            while cur_spk in merged_into:
+                cur_spk = merged_into[cur_spk]
+            s["speaker"] = cur_spk
+
+    # 5. Élimination des micro-locuteurs parasites (bruits ou toux isolées < 0.8s)
+    speaker_durations.clear()
+    total_speech_time = 0.0
+    for s in segments:
+        dur = max(0.0, float(s.get("end", 0)) - float(s.get("start", 0)))
+        spk = s.get("speaker", "SPEAKER_00")
+        speaker_durations[spk] = speaker_durations.get(spk, 0.0) + dur
+        total_speech_time += dur
+
+    if len(speaker_durations) > 1 and total_speech_time > 5.0:
+        ghost_speakers = set()
+        for spk, dur in speaker_durations.items():
+            if dur < 0.8 or (dur / total_speech_time) < 0.015:
+                ghost_speakers.add(spk)
+
+        if ghost_speakers and len(ghost_speakers) < len(speaker_durations):
+            logger.info(f"Élimination des locuteurs parasites/bruits : {ghost_speakers}")
+            for i, s in enumerate(segments):
+                if s.get("speaker") in ghost_speakers:
+                    # Raccrocher au locuteur précédent ou suivant
+                    fallback_spk = None
+                    if i > 0 and segments[i - 1].get("speaker") not in ghost_speakers:
+                        fallback_spk = segments[i - 1].get("speaker")
+                    elif i < len(segments) - 1 and segments[i + 1].get("speaker") not in ghost_speakers:
+                        fallback_spk = segments[i + 1].get("speaker")
+                    else:
+                        # Locuteur avec la plus grande durée
+                        fallback_spk = max((k for k in speaker_durations if k not in ghost_speakers), key=lambda k: speaker_durations[k])
+                    s["speaker"] = fallback_spk
+
+    # 6. Deuxième passe de lissage temporel après fusions
+    segments = smooth_speaker_fragmentation(segments, min_duration=1.0, max_gap=1.0)
+
+    # 7. Classement par temps de parole réel (SPEAKER_00 = voix principale)
+    final_durations = {}
+    for s in segments:
+        dur = max(0.0, float(s.get("end", 0)) - float(s.get("start", 0)))
+        spk = s.get("speaker", "SPEAKER_00")
+        final_durations[spk] = final_durations.get(spk, 0.0) + dur
+
+    sorted_speakers = sorted(final_durations.keys(), key=lambda k: final_durations[k], reverse=True)
     speaker_mapping = {}
-    counter = 0
-    
-    # On enlève la vérification du début pour forcer le nettoyage
-    # logger.debug("Reencode speakers") (Optionnel)
 
-    for segment in result["segments"]:
-        # On utilise .get() pour éviter le crash si la clé manque
-        old_speaker = segment.get("speaker", "SPEAKER_00")
-        
-        if old_speaker not in speaker_mapping:
-            if max_spk_val > 0 and counter >= max_spk_val:
-                speaker_mapping[old_speaker] = f"SPEAKER_{max_spk_val - 1:02d}"
-            else:
-                speaker_mapping[old_speaker] = f"SPEAKER_{counter:02d}"
-                counter += 1
-            
-        segment["speaker"] = speaker_mapping[old_speaker]
+    allowed_count = max_spk_val if max_spk_val > 0 else len(sorted_speakers)
+    primary_speakers = sorted_speakers[:allowed_count]
+    excess_speakers = sorted_speakers[allowed_count:]
 
-    logger.info(f"Diarisation des locuteurs : {len(speaker_mapping)} locuteur(s) detecte(s) -> {speaker_mapping}")
+    for idx, spk in enumerate(primary_speakers):
+        speaker_mapping[spk] = f"SPEAKER_{idx:02d}"
+
+    # Attribution intelligente des locuteurs excédentaires au profil acoustique le plus proche
+    for spk in excess_speakers:
+        best_target = primary_speakers[-1]
+        best_sim = -1.0
+        if spk in speaker_profiles:
+            v_spk = speaker_profiles[spk]["vector"]
+            for cand in primary_speakers:
+                if cand in speaker_profiles:
+                    sim = float(np.dot(v_spk, speaker_profiles[cand]["vector"]))
+                    if sim > best_sim:
+                        best_sim = sim
+                        best_target = cand
+        speaker_mapping[spk] = speaker_mapping[best_target]
+        logger.info(f"Locuteur excédentaire '{spk}' ({final_durations[spk]:.1f}s) assigné acoustiquement à '{speaker_mapping[spk]}'")
+
+    for s in segments:
+        old_spk = s.get("speaker", "SPEAKER_00")
+        s["speaker"] = speaker_mapping.get(old_spk, "SPEAKER_00")
+
+    result["segments"] = segments
+    detected_final = set(s["speaker"] for s in segments)
+    logger.info(
+        f"Post-Diarisation terminée : {len(detected_final)} locuteur(s) validé(s) {detected_final} "
+        f"(Durées de parole : { {speaker_mapping.get(k, k): f'{v:.1f}s' for k, v in final_durations.items()} })"
+    )
     return result
+
+
+def reencode_speakers(result, max_speakers=None):
+    """
+    Fonction de compatibilité : applique le raffinement et lissage intelligent des locuteurs.
+    """
+    return refine_diarization_and_speakers(None, result, max_speakers=max_speakers)
+
 
 def diarize_speech(
     audio_wav,
@@ -1086,7 +1358,7 @@ def diarize_speech(
     min_speakers,
     max_speakers,
     YOUR_HF_TOKEN,
-    model_name="pyannote/speaker-diarization@2.1",
+    model_name="pyannote/speaker-diarization-3.1",
 ):
     import os
     import gc
@@ -1094,42 +1366,59 @@ def diarize_speech(
     import whisperx
     from soni_translate.speech_segmentation import diarization_models
 
-    # On nettoie le token au cas où
     if YOUR_HF_TOKEN:
         YOUR_HF_TOKEN = str(YOUR_HF_TOKEN).strip()
 
+    # Si l'utilisateur n'a pas sélectionné de modèle ou a laissé 2.1 par défaut, on privilégie 3.1
+    if not model_name or "2.1" in str(model_name):
+        model_name = "pyannote/speaker-diarization-3.1"
+
     if max(min_speakers, max_speakers) > 1:
         diarize_model = None
-        
-        # --- TENTATIVE 1 : OFFICIELLE (Avec Token) ---
-        try:
-            print(">> Tentative 1 : Connexion officielle Pyannote...")
-            diarize_model = whisperx.DiarizationPipeline(
-                model_name=model_name,
-                use_auth_token=YOUR_HF_TOKEN,
-                device=os.environ.get("SONITR_DEVICE"),
-            )
-        except Exception as e:
-            print(f">> Echec Tentative 1 ({e}).")
-            
-            # --- TENTATIVE 2 : LA SOLUTION MAGIQUE (Sans Token) ---
-            print(">> Tentative 2 : Passage au modèle PUBLIC (fatymatariq)... 🏴‍☠️")
+
+        # Nettoyage préventif VRAM pour Pyannote
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # --- TENTATIVE 1 : Modèle Officiel Pyannote 3.1 (Avec Token) ---
+        if YOUR_HF_TOKEN:
             try:
-                # On force le modèle public qui ne demande pas de token
-                # Note: On utilise le modèle 3.1 public car il est meilleur
-                public_model = "fatymatariq/speaker-diarization-3.1"
-                
+                logger.info(f"Tentative 1 : Connexion officielle Pyannote avec Token ({model_name})...")
                 diarize_model = whisperx.DiarizationPipeline(
-                    model_name=public_model,
-                    use_auth_token=None, # Pas besoin de token !
+                    model_name=model_name,
+                    use_auth_token=YOUR_HF_TOKEN,
                     device=os.environ.get("SONITR_DEVICE"),
                 )
-                print(">> SUCCÈS ! Modèle public chargé.")
-            except Exception as e2:
-                # Si même ça échoue, on lève la vraie erreur
-                raise ValueError(f"Tout a échoué. Erreur finale: {e2}")
+            except Exception as e:
+                logger.warning(f"Échec Tentative 1 Pyannote officiel ({e}). Bascule vers le modèle public 3.1...")
 
-        # La suite est identique au code original...
+        # --- TENTATIVE 2 : Modèle Public 3.1 (Sans Token) ---
+        if diarize_model is None:
+            try:
+                public_model = "fatymatariq/speaker-diarization-3.1"
+                logger.info(f"Tentative 2 : Chargement du modèle public 3.1 ({public_model})...")
+                diarize_model = whisperx.DiarizationPipeline(
+                    model_name=public_model,
+                    use_auth_token=None,
+                    device=os.environ.get("SONITR_DEVICE"),
+                )
+                logger.info("Succès : Modèle public Pyannote 3.1 chargé.")
+            except Exception as e2:
+                # Dernier recours si le modèle public échoue
+                if YOUR_HF_TOKEN and model_name != "pyannote/speaker-diarization@2.1":
+                    try:
+                        logger.warning(f"Modèle public échoué ({e2}). Repli sur pyannote/speaker-diarization@2.1...")
+                        diarize_model = whisperx.DiarizationPipeline(
+                            model_name="pyannote/speaker-diarization@2.1",
+                            use_auth_token=YOUR_HF_TOKEN,
+                            device=os.environ.get("SONITR_DEVICE"),
+                        )
+                    except Exception as e3:
+                        raise ValueError(f"Échec de l'initialisation de Pyannote: {e3}")
+                else:
+                    raise ValueError(f"Échec de l'initialisation de Pyannote: {e2}")
+
         diarize_segments = diarize_model(
             audio_wav, min_speakers=min_speakers, max_speakers=max_speakers
         )
@@ -1141,26 +1430,16 @@ def diarize_speech(
         for segment in result_diarize["segments"]:
             if "speaker" not in segment:
                 segment["speaker"] = "SPEAKER_00"
-        
+
         del diarize_model
         gc.collect()
-        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     else:
         result_diarize = result
-        result_diarize["segments"] = [
-            {**item, "speaker": "SPEAKER_00"}
-            for item in result_diarize["segments"]
-        ]
-        # ... fin du code de diarisation ...
+        for item in result_diarize["segments"]:
+            item["speaker"] = "SPEAKER_00"
 
-        # --- DEBUG A AJOUTER ICI ---
-        liste_speakers = set()
-        for seg in result_diarize["segments"]:
-            if "speaker" in seg:
-                liste_speakers.add(seg["speaker"])
-        
-        print(f"\n📢 BILAN IA : {len(liste_speakers)} voix détectées.")
-        print(f"📢 QUI SONT-ILS ? : {liste_speakers}")
-        # ---------------------------
-    
-    return reencode_speakers(result_diarize)
+    # Post-traitement avancé : Comparaison acoustique indépendante, Anti-fragmentation et Tri intelligent
+    return refine_diarization_and_speakers(audio_wav, result_diarize, max_speakers=max_speakers)
+
