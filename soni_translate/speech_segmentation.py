@@ -132,6 +132,116 @@ def openai_api_whisper(
     return audio, result
 
 
+def extract_interaction_segments(interaction, default_lang="en", max_speakers=None):
+    """
+    Extrait les segments horodatés au mot-près depuis la réponse d'une interaction
+    Gemini 3.5 Transcribe (transcription_config avec timestamp_granularities=['word']).
+    """
+    def to_seconds(val):
+        if val is None:
+            return 0.0
+        if isinstance(val, (int, float)):
+            return float(val)
+        s = str(val).strip().rstrip('s')
+        try:
+            return float(s)
+        except ValueError:
+            return 0.0
+
+    words_list = []
+    detected_lang = default_lang
+
+    # Inspection dynamique des structures possibles renvoyées par l'API Interactions
+    steps = getattr(interaction, "steps", None) or []
+    if not steps and hasattr(interaction, "outputs"):
+        steps = interaction.outputs
+    elif not steps and hasattr(interaction, "output"):
+        steps = [interaction.output] if not isinstance(interaction.output, list) else interaction.output
+
+    for step in steps:
+        contents = getattr(step, "content", None) or getattr(step, "contents", None) or []
+        if not isinstance(contents, list):
+            contents = [contents]
+        for content in contents:
+            # Extraction de la langue détectée si disponible
+            if hasattr(content, "language") and content.language:
+                detected_lang = content.language
+            # Recherche d'annotations de mots
+            annots = getattr(content, "annotations", None) or []
+            if isinstance(annots, dict):
+                annots = annots.get("words", [])
+            for item in annots:
+                if isinstance(item, dict):
+                    w_text = item.get("word") or item.get("text") or ""
+                    w_start = item.get("start_time") or item.get("start") or item.get("start_offset")
+                    w_end = item.get("end_time") or item.get("end") or item.get("end_offset")
+                    w_spk = item.get("speaker_tag") or item.get("speaker") or "SPEAKER_00"
+                    if w_text and w_start is not None and w_end is not None:
+                        words_list.append({
+                            "word": str(w_text).strip(),
+                            "start": to_seconds(w_start),
+                            "end": to_seconds(w_end),
+                            "speaker": str(w_spk).strip(),
+                        })
+
+    if not words_list:
+        return None, default_lang
+
+    # Regroupement des mots en segments / répliques naturelles
+    speaker_map = {}
+    speaker_counter = 0
+    max_spk_val = int(max_speakers) if max_speakers is not None else 0
+
+    segments = []
+    current_words = []
+    first_spk = words_list[0]["speaker"]
+    if first_spk not in speaker_map:
+        speaker_map[first_spk] = "SPEAKER_00"
+        speaker_counter += 1
+
+    current_spk = speaker_map[first_spk]
+
+    for w in words_list:
+        raw_spk = w["speaker"]
+        if raw_spk not in speaker_map:
+            if max_spk_val > 0 and speaker_counter >= max_spk_val:
+                speaker_map[raw_spk] = f"SPEAKER_{max_spk_val - 1:02d}"
+            else:
+                speaker_map[raw_spk] = f"SPEAKER_{speaker_counter:02d}"
+                speaker_counter += 1
+        normalized_spk = speaker_map[raw_spk]
+
+        pause_detected = current_words and (w["start"] - current_words[-1]["end"] > 0.5)
+        speaker_changed = (normalized_spk != current_spk)
+        sentence_ended = current_words and current_words[-1]["word"][-1:] in ['.', '!', '?', '…']
+
+        if current_words and (speaker_changed or pause_detected or (sentence_ended and len(current_words) >= 4)):
+            segments.append({
+                "start": round(current_words[0]["start"], 3),
+                "end": round(current_words[-1]["end"], 3),
+                "text": " ".join([cw["word"] for cw in current_words]),
+                "speaker": current_spk,
+                "words": current_words,
+            })
+            current_words = []
+            current_spk = normalized_spk
+
+        w_clean = dict(w)
+        w_clean["speaker"] = normalized_spk
+        current_words.append(w_clean)
+
+    if current_words:
+        segments.append({
+            "start": round(current_words[0]["start"], 3),
+            "end": round(current_words[-1]["end"], 3),
+            "text": " ".join([cw["word"] for cw in current_words]),
+            "speaker": current_spk,
+            "words": current_words,
+        })
+
+    return segments, detected_lang
+
+
 def parse_gemini_transcription(text_resp, default_lang="en", audio_duration=None, max_speakers=None):
     """
     Parse la sortie textuelle de Gemini (JSON, markdown, ou format horodaté)
@@ -224,12 +334,15 @@ def parse_gemini_transcription(text_resp, default_lang="en", audio_duration=None
 
                 text_val = str(seg["text"]).strip()
                 if text_val:
-                    formatted_segments.append({
-                        "start": round(start_val, 2),
-                        "end": round(end_val, 2),
+                    seg_dict = {
+                        "start": round(start_val, 3),
+                        "end": round(end_val, 3),
                         "text": text_val,
                         "speaker": spk
-                    })
+                    }
+                    if "words" in seg and isinstance(seg["words"], list):
+                        seg_dict["words"] = seg["words"]
+                    formatted_segments.append(seg_dict)
 
     # 2. Si aucun segment JSON valide, parser les lignes horodatees (ex: [00:01.25 -> 00:04.50] SPEAKER_00: Texte)
     if not formatted_segments:
@@ -556,33 +669,34 @@ def gemini_api_transcribe(
             )
 
         prompt = f"""You are an expert speech recognition and speaker diarization engine.
-Transcribe the provided audio accurately with precise speaker diarization.
+Transcribe the provided audio with millisecond acoustic precision and accurate speaker diarization.
 {lang_instruction}
 
 CRITICAL RULES:
 {rule_speakers}
-2. Segment speech into natural, coherent sentences or dialogue phrases (ideal for subtitles and video dubbing).
-3. For each segment, output:
-   - "start": start time in seconds (float, e.g. 1.25)
-   - "end": end time in seconds (float, e.g. 3.40)
-   - "text": the transcribed text in the original spoken language.
-   - "speaker": speaker ID (e.g. "SPEAKER_00", "SPEAKER_01").
-4. Do NOT translate. Keep the original spoken words.
-5. Filter out filler sounds (like "um", "uh", "euh", stuttering).
-6. Return ONLY valid JSON in this exact structure:
+2. MILLISECOND TIMESTAMPS & ACOUSTIC BOUNDARIES:
+   - "start": exact time in seconds to the millisecond (e.g. 1.234) where the first phoneme/sound of the utterance physically begins. Do NOT include preceding silence.
+   - "end": exact time in seconds to the millisecond (e.g. 4.567) where the vocal sound physically ends. Do NOT include trailing silence.
+3. OVERLAPPING SPEECH & CROSS-TALK:
+   - When two speakers speak, argue, shout, or laugh simultaneously, DO NOT merge them and DO NOT drop any voice!
+   - Create separate overlapping segments with accurate start and end times reflecting the true simultaneous speech.
+4. Segment speech into natural, coherent sentences or dialogue phrases (ideal for subtitles and video dubbing).
+5. Do NOT translate. Keep the original spoken words accurately.
+6. Filter out filler sounds (like "um", "uh", "euh", stuttering).
+7. Return ONLY valid JSON in this exact structure:
 {{
   "language": "en",
   "segments": [
     {{
-      "start": 0.0,
-      "end": 2.5,
+      "start": 0.521,
+      "end": 2.480,
       "text": "First speaker line here.",
       "speaker": "SPEAKER_00"
     }},
     {{
-      "start": 2.8,
-      "end": 5.2,
-      "text": "Second speaker answering here.",
+      "start": 1.950,
+      "end": 4.120,
+      "text": "Second speaker interrupting simultaneously.",
       "speaker": "SPEAKER_01"
     }}
   ]
@@ -594,6 +708,43 @@ CRITICAL RULES:
         fallback_segments = None
         fallback_lang = None
         last_error = None
+
+        # --- ETAPE 0 : TENTATIVE PRIORITAIRE API INTERACTIONS NATIVE (WORD-LEVEL TIMESTAMPS) ---
+        if hasattr(client, "interactions") and hasattr(client.interactions, "create"):
+            for m_candidate in ["gemini-3.5-transcribe", "gemini-3.5-flash", "gemini-3.8-flash"]:
+                try:
+                    logger.info(f"Gemini Transcribe : Tentative d'horodatage mot-par-mot natif via client.interactions.create ('{m_candidate}')...")
+                    file_mime = getattr(uploaded_file, "mime_type", None) or "audio/wav"
+                    file_uri = getattr(uploaded_file, "uri", None) or getattr(uploaded_file, "name", "")
+                    interaction_res = client.interactions.create(
+                        model=m_candidate,
+                        input=[{
+                            "type": "audio",
+                            "uri": file_uri,
+                            "mime_type": file_mime,
+                        }],
+                        generation_config={
+                            "transcription_config": {
+                                "mode": {
+                                    "type": "verbatim",
+                                    "diarization_mode": "speaker",
+                                    "timestamp_granularities": ["word"],
+                                }
+                            }
+                        }
+                    )
+                    inter_segs, inter_lang = extract_interaction_segments(
+                        interaction_res, 
+                        default_lang=source_lang or "en", 
+                        max_speakers=max_spk
+                    )
+                    if inter_segs and len(inter_segs) > 0:
+                        logger.info(f"Gemini Transcribe : Horodatage mot-par-mot natif RÉUSSI ({len(inter_segs)} segments extraits au millième de seconde) !")
+                        best_segments = inter_segs
+                        best_lang = inter_lang
+                        break
+                except Exception as e_inter:
+                    logger.debug(f"API Interactions native non supportée sur '{m_candidate}' ({e_inter}), bascule vers generate_content...")
 
         def extract_text(resp):
             if not resp:
@@ -632,6 +783,8 @@ CRITICAL RULES:
             return ""
 
         for mod in unique_models:
+            if best_segments is not None:
+                break
             try:
                 logger.info(f"Gemini Transcribe : Tentative avec le modèle '{mod}'...")
                 response_text = ""
@@ -984,6 +1137,17 @@ def align_speech(audio, result):
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
+    # Expansion acoustique de sécurité (+/- 150ms) pour donner à Wav2Vec2 la marge
+    # nécessaire pour caler le premier et le dernier phonème sans coupure
+    max_audio_sec = len(audio) / 16000.0 if audio is not None else 999999.0
+    orig_segments = copy.deepcopy(result.get("segments", []))
+    segments_for_align = []
+    for s in orig_segments:
+        sc = copy.deepcopy(s)
+        sc["start"] = max(0.0, float(sc.get("start", 0)) - 0.15)
+        sc["end"] = min(max_audio_sec, float(sc.get("end", 0)) + 0.15)
+        segments_for_align.append(sc)
+
     model_a = None
     try:
         model_a, metadata = whisperx.load_align_model(
@@ -993,8 +1157,8 @@ def align_speech(audio, result):
             if result["language"] in DAMHF.keys()
             else EXTRA_ALIGN[result["language"]],
         )
-        result = whisperx.align(
-            result["segments"],
+        aligned_result = whisperx.align(
+            segments_for_align,
             model_a,
             metadata,
             audio,
@@ -1002,6 +1166,7 @@ def align_speech(audio, result):
             return_char_alignments=True,
             print_progress=False,
         )
+        result = aligned_result
     except Exception as e_align:
         if ("out of memory" in str(e_align).lower() or "cuda failed" in str(e_align).lower()) and "cuda" in str(align_device).lower():
             logger.warning(f"VRAM insuffisante pour l'alignement Wav2Vec2 sur GPU ({e_align}). Bascule automatique de secours sur CPU...")
@@ -1019,8 +1184,8 @@ def align_speech(audio, result):
                 if result["language"] in DAMHF.keys()
                 else EXTRA_ALIGN[result["language"]],
             )
-            result = whisperx.align(
-                result["segments"],
+            aligned_result = whisperx.align(
+                segments_for_align,
                 model_a,
                 metadata,
                 audio,
@@ -1028,6 +1193,7 @@ def align_speech(audio, result):
                 return_char_alignments=True,
                 print_progress=False,
             )
+            result = aligned_result
         else:
             raise e_align
     finally:
@@ -1036,6 +1202,14 @@ def align_speech(audio, result):
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+    # Nettoyage et sécurisation : si un segment n'a pas pu être aligné mot-à-mot,
+    # restaurer ses bornes d'origine pour ne pas conserver l'expansion artificielle
+    for idx, seg in enumerate(result.get("segments", [])):
+        words = seg.get("words", [])
+        if not words and idx < len(orig_segments):
+            seg["start"] = orig_segments[idx].get("start", seg.get("start"))
+            seg["end"] = orig_segments[idx].get("end", seg.get("end"))
 
     return result
 
