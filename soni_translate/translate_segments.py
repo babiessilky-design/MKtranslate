@@ -198,7 +198,7 @@ def parse_llm_response(raw_text, expected_len=None):
     return lines if lines else None
 
 def _single_translate(text, target_lang):
-    """Traduction de secours sécurisée d'une phrase unique avec plusieurs essais."""
+    """Traduction de secours sécurisée d'une phrase unique avec plusieurs essais et temporisation anti-ban."""
     orig_text = str(text).strip()
     if not orig_text:
         return ""
@@ -211,8 +211,44 @@ def _single_translate(text, target_lang):
                 return res.strip()
         except Exception as e:
             logger.warning(f"[_single_translate] Erreur tentative {attempt+1} pour '{orig_text[:25]}' vers '{target_clean}': {e}")
-            time.sleep(0.8)
+            time.sleep(1.5 * (attempt + 1))
     return orig_text
+
+def _safe_batch_translate(batch, target_lang):
+    """
+    Traduction de secours groupée via translate_batch :
+    Envoie l'ensemble des phrases du lot en UN SEUL appel HTTP à Google Translate.
+    Évite complètement le blocage IP de Google (5 req/sec) et traduit instantanément le batch complet.
+    """
+    target_clean = fix_code_language(target_lang)
+    texts = [seg["text"].strip() if seg.get("text") else "" for seg in batch]
+    non_empty = [t for t in texts if t]
+    if not non_empty:
+        return texts
+
+    # 1. Tentative groupée en 1 seule requête pour tout le lot (ultra-rapide)
+    try:
+        tr = GoogleTranslator(source='auto', target=target_clean)
+        res_list = tr.translate_batch(texts)
+        if res_list and len(res_list) == len(texts):
+            clean_res = []
+            for r, orig in zip(res_list, texts):
+                txt = str(r).strip() if r else orig
+                clean_res.append(txt if not is_corrupted_translation(txt) else orig)
+            logger.info(f"Secours groupé Google Translate réussi ({len(clean_res)} phrases en 1 seul appel).")
+            return clean_res
+    except Exception as e:
+        logger.warning(f"translate_batch groupé direct a échoué ({e}), passage en secours individuel temporisé...")
+
+    # 2. Secours individuel sécurisé avec temporisation anti-ban (> 1 seconde d'écart)
+    clean_res = []
+    for s in texts:
+        if s:
+            clean_res.append(_single_translate(s, target_clean))
+            time.sleep(1.0)
+        else:
+            clean_res.append("")
+    return clean_res
 
 # ==============================================================================
 # BATCHING CONTEXTUEL SÉCURISÉ AVEC GESTION DU RATE-LIMIT
@@ -297,15 +333,18 @@ def _batch_with_context(segments, batch_size, translate_func, desc, target_lang)
             start += batch_size
             time.sleep(0.5)
         else:
-            # 3. Moins de 70% ou échec complet : bascule individuelle de sécurité
-            logger.warning(f"Batch {start}-{end} incomplet ({len(translated_lines) if translated_lines else 0}/{batch_len} lignes). Secours ligne par ligne activé...")
-            for j, seg in enumerate(batch):
-                translated[start + j]["text"] = _single_translate(seg["text"], target_lang)
-                time.sleep(0.2)
+            # 3. Moins de 70% ou échec complet : bascule groupée de sécurité (1 seul appel pour tout le batch !)
+            logger.warning(f"Batch {start}-{end} incomplet ({len(translated_lines) if translated_lines else 0}/{batch_len} lignes). Secours groupé activé...")
+            fallback_res = _safe_batch_translate(batch, target_lang)
+            for j in range(batch_len):
+                if j < len(fallback_res) and fallback_res[j]:
+                    translated[start + j]["text"] = fallback_res[j]
+                else:
+                    translated[start + j]["text"] = _single_translate(batch[j]["text"], target_lang)
             context.extend([translated[start + j]["text"] for j in range(batch_len)])
             progress.update(batch_len)
             start += batch_size
-            time.sleep(0.5)
+            time.sleep(1.0)
 
     try: progress.close()
     except: pass
@@ -347,7 +386,7 @@ def get_gemini_api_keys():
             keys.append(extra.strip())
     return keys
 
-def _wait_for_gemini_pacing(min_interval=4.1):
+def _wait_for_gemini_pacing(min_interval=4.3):
     """
     Régulateur de débit préventif :
     Google AI Studio autorise 15 requêtes/minute (1 requête toutes les 4 secondes).
@@ -367,17 +406,14 @@ def gemini_translate(segments, target, source=None, mode="flash"):
         logger.error("❌ GEMINI: Clé GOOGLE_API_KEY manquante dans l'environnement !")
         return translate_iterative(segments, target, source)
 
-    # Modèles ultra-rapides et économes en quota (zéro overhead de pensée en priorité absolue)
+    # Modèles officiels actifs recommandés par Google (zéro modèle 404 obsolète)
     if mode == "pro":
-        candidates = ["gemini-1.5-pro", "gemini-2.5-pro", "gemini-2.0-pro-exp-02-05", "gemini-3.1-pro-preview"]
+        candidates = ["gemini-3.1-pro-preview", "gemini-3.1-pro"]
     else:
         candidates = [
-            "gemini-2.0-flash",       # Instantané, zéro token de pensée, très économe en quota
-            "gemini-1.5-flash",       # Quota gratuit massif (1M TPM, 1500 RPD), modèle de référence
-            "gemini-2.5-flash",       # Modèle 2.5
-            "gemini-2.5-flash-lite",
-            "gemini-3.5-flash",
-            "gemini-3.8-flash",
+            "gemini-3.8-flash",       # Modèle officiel actif recommandé par Google
+            "gemini-3.5-flash",       # Modèle officiel actif
+            "gemini-3.5-flash-lite",  # Modèle officiel actif ultra-rapide
         ]
 
     # Prompt système dynamique par langue
@@ -410,9 +446,6 @@ def gemini_translate(segments, target, source=None, mode="flash"):
         num_keys = len(current_keys)
         num_models = len(candidates)
 
-        # Régulation automatique pour respecter la limite de 15 RPM
-        _wait_for_gemini_pacing(min_interval=4.1)
-
         for key_offset in range(num_keys):
             k_idx = (_ACTIVE_KEY_INDEX + key_offset) % num_keys
             current_key = current_keys[k_idx]
@@ -421,6 +454,10 @@ def gemini_translate(segments, target, source=None, mode="flash"):
             for offset in range(num_models):
                 idx = (_ACTIVE_GEMINI_INDEX + offset) % num_models
                 m_id = candidates[idx]
+
+                # Régulation stricte avant chaque tentative pour ne jamais dépasser 15 RPM
+                _wait_for_gemini_pacing(min_interval=4.3)
+
                 try:
                     response = current_client.models.generate_content(
                         model=m_id, 
@@ -441,8 +478,11 @@ def gemini_translate(segments, target, source=None, mode="flash"):
                             logger.info("Bascule immédiate sur la clé API Gemini suivante...")
                             break
                         else:
-                            time.sleep(5.0)
+                            time.sleep(12.0)
                             continue
+                    elif "404" in err_str or "not_found" in err_str:
+                        logger.warning(f"Modèle '{m_id}' indisponible (404). Essai du modèle suivant...")
+                        continue
                     else:
                         logger.warning(f"Modèle '{m_id}' indisponible ({e}). Essai du suivant...")
                         continue
@@ -720,4 +760,3 @@ def translate_text(
         logger.info("Auto-Emotion Fish Audio: Balises d'émotions appliquées sur les segments traduits.")
 
     return translated
-
