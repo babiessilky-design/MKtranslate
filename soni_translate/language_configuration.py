@@ -187,14 +187,51 @@ EXTRA_ALIGN = {
 
 
 def fix_code_language(translate_to, syntax="google"):
+    if not translate_to:
+        return "auto" if syntax == "google" else ""
+
+    raw_val = str(translate_to).strip()
+
+    # 1. Correspondance directe dans le dictionnaire LANGUAGES ("Hindi (hi)" -> "hi")
+    code = LANGUAGES.get(raw_val)
+    if not code:
+        # 2. Chercher un code ISO entre parenthèses : "Hindi (hi)" -> "hi"
+        import re
+        match = re.search(r'\(([^)]+)\)', raw_val)
+        if match:
+            code = match.group(1).strip()
+        else:
+            # 3. Vérifier si c'est déjà un code brut ("hi", "fr", "en")
+            code = raw_val
+
+    # Traitement de la détection automatique
+    if str(code).lower() in ["automatic detection", "auto", "none"]:
+        code = "auto"
+
     if syntax == "google":
         # google-translator, gTTS
-        replace_lang_code = {"zh": "zh-CN", "he": "iw", "zh-cn": "zh-CN"}
+        replace_lang_code = {
+            "zh": "zh-CN",
+            "zh-cn": "zh-CN",
+            "zh-TW": "zh-TW",
+            "zh-tw": "zh-TW",
+            "he": "iw",
+            "jw": "jv",
+            "auto": "auto",
+        }
     elif syntax == "coqui":
         # coqui-xtts
-        replace_lang_code = {"zh": "zh-cn", "zh-CN": "zh-cn", "zh-TW": "zh-cn"}
+        replace_lang_code = {
+            "zh": "zh-cn",
+            "zh-CN": "zh-cn",
+            "zh-cn": "zh-cn",
+            "zh-TW": "zh-cn",
+            "zh-tw": "zh-cn"
+        }
+    else:
+        replace_lang_code = {}
 
-    new_code_lang = replace_lang_code.get(translate_to, translate_to)
+    new_code_lang = replace_lang_code.get(code, code)
     logger.debug(f"Fix code {translate_to} -> {new_code_lang}")
     return new_code_lang
 

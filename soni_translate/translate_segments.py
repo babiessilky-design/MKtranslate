@@ -56,14 +56,18 @@ def get_system_prompt(target_lang):
     """Génère un prompt dynamique adapté à la langue cible choisie par l'utilisateur."""
     is_fish_emotion = os.getenv("FISH_AUTO_EMOTION", "False").lower() in ["true", "1", "yes"]
 
+    clean_code = fix_code_language(target_lang)
+    full_name = INVERTED_LANGUAGES.get(clean_code, target_lang)
+    lang_instruction = f"{full_name} (code ISO: '{clean_code}')"
+
     if is_fish_emotion:
         return f"""Tu es un traducteur expert en doublage vidéo dynamique pour YouTube et le cinéma.
 
 RÈGLES OBLIGATOIRES :
-1. Traduis chaque ligne fidèlement VERS LA LANGUE SUIVANTE : {target_lang}.
+1. Traduis chaque ligne fidèlement VERS LA LANGUE SUIVANTE : {lang_instruction}.
 2. Le style doit être naturel, fluide, dynamique et parlé (adapté à un public jeune).
 3. Conserve impérativement le sens exact, les nuances affectives et le tutoiement/langage familier si applicable.
-4. Traduis TOUTES les phrases sans exception.
+4. Traduis TOUTES les phrases sans exception, sans commentaires ni notes.
 5. DIRECTIVE OBLIGATOIRE ÉMOTIONS ET JEU D'ACTEUR (FISH AUDIO) :
 Pour CHAQUE réplique expressive, insère impérativement au tout début la balise d'émotion Fish Audio correspondante parmi :
 - [excited] pour toute phrase dynamique, enthousiaste, joyeuse ou avec un point d'exclamation (ex: [excited] Regarde ce qu'on a trouvé !)
@@ -82,11 +86,11 @@ Exemple :
     return f"""Tu es un traducteur expert en doublage vidéo pour YouTube.
 
 RÈGLES OBLIGATOIRES :
-1. Traduis chaque ligne fidèlement VERS LA LANGUE SUIVANTE : {target_lang}.
+1. Traduis chaque ligne fidèlement VERS LA LANGUE SUIVANTE : {lang_instruction}.
 2. Le style doit être naturel, fluide et parlé (adapté à un public jeune).
-3. Le texte en {target_lang} doit être court et percutant pour coller au rythme de la vidéo.
+3. Le texte en {lang_instruction} doit être court et percutant pour coller au rythme de la vidéo.
 4. Conserve impérativement le sens exact, les émotions et le niveau de langage (tutoiement/familier si applicable).
-5. Traduis TOUTES les phrases sans exception.
+5. Traduis TOUTES les phrases sans exception, sans aucun commentaire ou texte hors du JSON.
 6. Renvoie la traduction STRICTEMENT sous forme d'un tableau JSON de chaînes de caractères.
 Exemple :
 ["Traduction 1", "Traduction 2", "Traduction 3"]"""
@@ -100,52 +104,92 @@ def is_corrupted_translation(text):
         return True
     bad_patterns = [
         "error 500", "server error", "that’s an error", "that's an error",
-        "please try again later", "that's all we know", "html", "<body", "500."
+        "please try again later", "that's all we know", "html", "<body", "500.",
+        "here is the translation", "here are the translations", "voici la traduction",
+        "voici les traductions", "certainly!", "sure, here", "note:"
     ]
-    text_lower = text.lower()
+    text_lower = text.lower().strip()
     return any(p in text_lower for p in bad_patterns)
 
 # ==============================================================================
 # PARSEUR UNIVERSEL DE RÉPONSES LLM
 # ==============================================================================
-def parse_llm_response(raw_text, expected_len):
+def parse_llm_response(raw_text, expected_len=None):
     """Extrait proprement les traductions qu'elles soient en liste JSON, dictionnaire ou texte numéroté."""
     if not raw_text or not isinstance(raw_text, str):
         return None
     
-    clean = re.sub(r'^```(?:json)?\s*', '', raw_text.strip())
-    clean = re.sub(r'\s*```$', '', clean).strip()
+    clean = raw_text.strip()
 
-    # 1. Tentative de décodage JSON
+    # 1. Tentative d'extraction d'un bloc JSON explicite ```json ... ``` ou [ ... ] / { ... }
+    json_candidate = None
+    json_block = re.search(r'```(?:json)?\s*([\[\{].*?[\]\}])\s*```', clean, re.DOTALL)
+    if json_block:
+        json_candidate = json_block.group(1).strip()
+    else:
+        array_match = re.search(r'(\[[\s\S]*\])', clean)
+        if array_match:
+            json_candidate = array_match.group(1).strip()
+        else:
+            dict_match = re.search(r'(\{[\s\S]*\})', clean)
+            if dict_match:
+                json_candidate = dict_match.group(1).strip()
+
+    if not json_candidate:
+        json_candidate = re.sub(r'^```(?:json)?\s*', '', clean)
+        json_candidate = re.sub(r'\s*```$', '', json_candidate).strip()
+
     try:
-        data = json.loads(clean)
+        data = json.loads(json_candidate)
         if isinstance(data, list):
-            res = [str(x).strip() for x in data if str(x).strip()]
-            if res:
+            res = []
+            for x in data:
+                if isinstance(x, dict):
+                    val = x.get("text") or x.get("translation") or x.get("translated") or list(x.values())[-1]
+                    res.append(str(val).strip())
+                else:
+                    res.append(str(x).strip())
+            res = [x for x in res if x and not is_corrupted_translation(x)]
+            if res and (expected_len is None or len(res) == expected_len):
+                return res
+            elif res and len(res) >= (expected_len or 1) * 0.7:
                 return res
         elif isinstance(data, dict):
             for v in data.values():
                 if isinstance(v, list):
-                    res = [str(x).strip() for x in v if str(x).strip()]
+                    res = [str(x).strip() for x in v if str(x).strip() and not is_corrupted_translation(str(x))]
                     if res:
                         return res
             def get_num(key):
                 nums = re.findall(r'\d+', str(key))
                 return int(nums[0]) if nums else 9999
             sorted_keys = sorted(data.keys(), key=get_num)
-            res = [str(data[k]).strip() for k in sorted_keys if str(data[k]).strip()]
+            res = []
+            for k in sorted_keys:
+                val = data[k]
+                if isinstance(val, dict):
+                    val = val.get("text") or val.get("translation") or list(val.values())[-1]
+                res.append(str(val).strip())
+            res = [x for x in res if x and not is_corrupted_translation(x)]
             if res:
                 return res
     except Exception:
         pass
 
-    # 2. Fallback de parsing ligne par ligne numérotée
+    # 2. Fallback de parsing ligne par ligne
     lines = []
+    line_prefix_regex = re.compile(
+        r'^\s*[\*\-•]?\s*(?:\*\*)?(?:Line|Ligne|Phrase|Sentence)?\s*\[?\d+\]?[\.\)\:\-\s]*(?:\*\*)?[\:\-\s]*',
+        re.IGNORECASE
+    )
     for line in clean.split('\n'):
         l_str = line.strip()
-        if not l_str or l_str in ['[', ']', '{', '}']:
+        if not l_str or l_str in ['[', ']', '{', '}', '```', '```json']:
             continue
-        clean_line = re.sub(r'^\s*[\d]+[\.\)\-\:\s]+\s*', '', l_str).strip()
+        l_lower = l_str.lower()
+        if l_lower.startswith(('here is', 'here are', 'voici', 'note:', 'certainly', 'sure')):
+            continue
+        clean_line = line_prefix_regex.sub('', l_str).strip()
         clean_line = re.sub(r'^["\']|["\',]$', '', clean_line).strip()
         if clean_line and not is_corrupted_translation(clean_line):
             lines.append(clean_line)
@@ -158,14 +202,15 @@ def _single_translate(text, target_lang):
     if not orig_text:
         return ""
     target_clean = fix_code_language(target_lang)
-    for _ in range(3):
+    for attempt in range(3):
         try:
             tr = GoogleTranslator(source='auto', target=target_clean)
             res = tr.translate(orig_text)
-            if res and not is_corrupted_translation(res) and res.strip() != orig_text:
+            if res and not is_corrupted_translation(res):
                 return res.strip()
-        except Exception:
-            time.sleep(1.0)
+        except Exception as e:
+            logger.warning(f"[_single_translate] Erreur tentative {attempt+1} pour '{orig_text[:25]}' vers '{target_clean}': {e}")
+            time.sleep(0.8)
     return orig_text
 
 # ==============================================================================
@@ -178,6 +223,7 @@ def _batch_with_context(segments, batch_size, translate_func, desc, target_lang)
     
     # On génère le prompt dynamique pour la langue cible
     sys_prompt = get_system_prompt(target_lang)
+    target_clean = fix_code_language(target_lang)
 
     start = 0
     while start < len(segments):
@@ -188,53 +234,77 @@ def _batch_with_context(segments, batch_size, translate_func, desc, target_lang)
         previous = "\n".join([f"Précédent {i+1}: {c}" for i, c in enumerate(context[-3:])])
         lines_text = "\n".join([f"{i+1}. {seg['text'].strip()}" for i, seg in enumerate(batch)])
 
+        context_part = f"Contexte précédent :\n{previous}\n\n" if context else ""
         full_prompt = (
             f"{sys_prompt}\n\n"
-            f"Contexte précédent :\n{previous}\n\n"
+            f"{context_part}"
             f"Lignes à traduire ({batch_len} phrases) :\n{lines_text}\n\n"
-            f"Renvoie le tableau JSON des {batch_len} traductions :"
+            f"Renvoie STRICTEMENT un tableau JSON de {batch_len} chaînes de caractères (une pour chaque ligne ci-dessus) :"
         )
 
         translated_lines = None
         for attempt in range(3):
             try:
                 translated_lines = translate_func(full_prompt, batch_len)
-                if translated_lines and len(translated_lines) >= batch_len:
+                if translated_lines and len(translated_lines) == batch_len:
                     break
             except Exception as e:
                 err_msg = str(e).lower()
                 if "429" in err_msg or "resource_exhausted" in err_msg or "503" in err_msg or "unavailable" in err_msg:
-                    sleep_time = 15.0 * (attempt + 1)
+                    sleep_time = 12.0 * (attempt + 1)
                     logger.warning(f"Quota/Saturation API au batch {start}-{end}. Pause de {sleep_time}s...")
                     time.sleep(sleep_time)
                 else:
                     logger.warning(f"Tentative {attempt+1} échouée pour le batch {start}-{end}: {e}")
-                    time.sleep(1.5 * (attempt + 1))
+                    time.sleep(1.0 * (attempt + 1))
 
-        # Application intelligente des traductions
-        if translated_lines and len(translated_lines) > 0:
+        # Application intelligente et sécurisée des traductions
+        clean_regex = re.compile(
+            r'^\s*[\*\-•]?\s*(?:\*\*)?(?:Line|Ligne|Phrase|Sentence)?\s*\[?\d+\]?[\.\)\:\-\s]*(?:\*\*)?[\:\-\s]*',
+            re.IGNORECASE
+        )
+
+        if translated_lines and len(translated_lines) == batch_len:
+            # 1. Correspondance 1:1 exacte et parfaite
+            for j in range(batch_len):
+                clean = clean_regex.sub('', str(translated_lines[j])).strip()
+                clean = re.sub(r'^["\']|["\']$', '', clean).strip()
+                is_untranslated = (target_clean != "en" and clean.lower() == batch[j]["text"].strip().lower() and len(clean) > 5)
+                if clean and not is_corrupted_translation(clean) and not is_untranslated:
+                    translated[start + j]["text"] = clean
+                else:
+                    translated[start + j]["text"] = _single_translate(batch[j]["text"], target_lang)
+            context.extend([translated[start + j]["text"] for j in range(batch_len)])
+            progress.update(batch_len)
+            start += batch_size
+            time.sleep(0.5)
+        elif translated_lines and len(translated_lines) >= int(batch_len * 0.7):
+            # 2. Le modèle a renvoyé au moins 70% des lignes
             for j in range(batch_len):
                 if j < len(translated_lines):
-                    clean = re.sub(r'^\s*[\d]+[\.\)\-\:\s]+', '', str(translated_lines[j])).strip()
+                    clean = clean_regex.sub('', str(translated_lines[j])).strip()
                     clean = re.sub(r'^["\']|["\']$', '', clean).strip()
-                    if clean and not is_corrupted_translation(clean):
+                    is_untranslated = (target_clean != "en" and clean.lower() == batch[j]["text"].strip().lower() and len(clean) > 5)
+                    if clean and not is_corrupted_translation(clean) and not is_untranslated:
                         translated[start + j]["text"] = clean
                     else:
                         translated[start + j]["text"] = _single_translate(batch[j]["text"], target_lang)
                 else:
                     translated[start + j]["text"] = _single_translate(batch[j]["text"], target_lang)
-            context.extend(translated_lines[:batch_len])
+            context.extend([translated[start + j]["text"] for j in range(batch_len)])
             progress.update(batch_len)
             start += batch_size
-            time.sleep(1.0)
+            time.sleep(0.5)
         else:
-            logger.warning(f"Paquet {start}-{end} basculé sur secours individuel...")
+            # 3. Moins de 70% ou échec complet : bascule individuelle de sécurité
+            logger.warning(f"Batch {start}-{end} incomplet ({len(translated_lines) if translated_lines else 0}/{batch_len} lignes). Secours ligne par ligne activé...")
             for j, seg in enumerate(batch):
                 translated[start + j]["text"] = _single_translate(seg["text"], target_lang)
-                time.sleep(0.3)
+                time.sleep(0.2)
+            context.extend([translated[start + j]["text"] for j in range(batch_len)])
             progress.update(batch_len)
             start += batch_size
-            time.sleep(1.0)
+            time.sleep(0.5)
 
     try: progress.close()
     except: pass
@@ -269,18 +339,18 @@ def gemini_translate(segments, target, source=None, mode="flash"):
 
     client = genai.Client(api_key=api_key)
 
-    # Modèles actifs de secours
+    # Modèles actifs de secours (modèles Google AI Studio officiels en priorité)
     if mode == "pro":
-        candidates = ["gemini-3.1-pro-preview", "gemini-3.1-pro"]
+        candidates = ["gemini-2.5-pro", "gemini-1.5-pro", "gemini-2.0-pro-exp-02-05", "gemini-3.1-pro-preview", "gemini-3.1-pro"]
     else:
-        candidates = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.7-flash"]
+        candidates = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.7-flash"]
 
     # Prompt système dynamique par langue
     sys_prompt = get_system_prompt(target)
 
     config_kwargs = {
         "temperature": 0.2,
-        "max_output_tokens": 3000,
+        "max_output_tokens": 4000,
         "response_mime_type": "application/json",
         "system_instruction": sys_prompt
     }
@@ -307,14 +377,14 @@ def gemini_translate(segments, target, source=None, mode="flash"):
                     return res
             except Exception as e:
                 last_err = e
-                logger.warning(f"Modèle '{m_id}' saturé/indisponible ({e}). Bascule immédiate sur le modèle suivant...")
+                logger.warning(f"Modèle '{m_id}' indisponible ({e}). Bascule immédiate sur le modèle suivant...")
                 continue
 
         if last_err:
             raise last_err
         return None
 
-    return _batch_with_context(segments, 20, call_gemini, f"Translating (Gemini {mode.upper()} Uncensored)", target)
+    return _batch_with_context(segments, 10, call_gemini, f"Translating (Gemini {mode.upper()} Uncensored)", target)
 
 # ==============================================================================
 # GROQ (LLaMA-3.3 70B)
@@ -340,12 +410,12 @@ def groq_translate(segments, target, source=None):
         )
         return parse_llm_response(chat.choices[0].message.content, batch_len)
 
-    return _batch_with_context(segments, 25, call_groq, "Translating (Groq LLaMA-3.3 Batch)", target)
+    return _batch_with_context(segments, 12, call_groq, "Translating (Groq LLaMA-3.3 Batch)", target)
 
 # ==============================================================================
 # ZEPHYR (Hugging Face Inference)
 # ==============================================================================
-def hf_zephyr_translate(segments, target, source=None, batch_size=15):
+def hf_zephyr_translate(segments, target, source=None, batch_size=10):
     hf_token = os.getenv("HF_TOKEN") or os.getenv("YOUR_HF_TOKEN") or ""
     if not hf_token or not hf_token.startswith("hf_"):
         logger.error("❌ ZEPHYR: HF_TOKEN manquant !")
@@ -366,9 +436,13 @@ def hf_zephyr_translate(segments, target, source=None, batch_size=15):
 # ==============================================================================
 def translate_iterative(segments, target, source=None):
     segments_ = copy.deepcopy(segments)
-    if not source: source = "auto"
     target_clean = fix_code_language(target)
-    translator = GoogleTranslator(source=source, target=target_clean)
+    source_clean = fix_code_language(source) if source and source != "auto" else "auto"
+    try:
+        translator = GoogleTranslator(source=source_clean, target=target_clean)
+    except Exception as e:
+        logger.error(f"Erreur init GoogleTranslator (source={source_clean}, target={target_clean}): {e}")
+        translator = GoogleTranslator(source='auto', target='en')
     for line in tqdm(range(len(segments_)), desc="Translating (Iterative)"):
         text = segments_[line]["text"]
         try:
@@ -376,12 +450,13 @@ def translate_iterative(segments, target, source=None):
             if res and not is_corrupted_translation(res):
                 segments_[line]["text"] = res
         except Exception as e:
-            logger.error(f"Error google iterative: {e}")
+            logger.error(f"Error google iterative ligne {line}: {e}")
     return segments_
 
 def translate_batch(segments, target, chunk_size=2000, source=None):
     segments_copy = copy.deepcopy(segments)
-    if not source: source = "auto"
+    target_clean = fix_code_language(target)
+    source_clean = fix_code_language(source) if source and source != "auto" else "auto"
     text_lines = [seg["text"].strip() for seg in segments_copy]
     text_merge = []
     actual_chunk = ""
@@ -403,7 +478,11 @@ def translate_batch(segments, target, chunk_size=2000, source=None):
         global_text_list.append(actual_text_list)
 
     progress_bar = tqdm(total=len(segments), desc="Translating (Google Batch)")
-    translator = GoogleTranslator(source=source, target=target)
+    try:
+        translator = GoogleTranslator(source=source_clean, target=target_clean)
+    except Exception as e:
+        logger.warning(f"GoogleTranslator batch init error ({e}), bascule vers iterative...")
+        return translate_iterative(segments, target_clean, source_clean)
     split_list = []
    
     try:
@@ -427,13 +506,14 @@ def translate_batch(segments, target, chunk_size=2000, source=None):
             split_list.append(split_text)
         try: progress_bar.close()
         except: pass
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Bascule de translate_batch vers translate_iterative: {e}")
         try: progress_bar.close()
         except: pass
-        return translate_iterative(segments, target, source)
+        return translate_iterative(segments, target_clean, source_clean)
         
     translated_lines = list(chain.from_iterable(split_list))
-    return verify_translate(segments, segments_copy, translated_lines, target, source)
+    return verify_translate(segments, segments_copy, translated_lines, target_clean, source_clean)
 
 def verify_translate(segments, segments_copy, translated_lines, target, source):
     if len(segments) == len(translated_lines):
@@ -515,7 +595,6 @@ def apply_rule_based_emotions(segments):
     logger.info(f"[Auto-Emotion] Total segments enrichis avec succès : {tagged_count}/{len(segments)}")
     return segments
 
-
 # ==============================================================================
 # DISPATCHER PRINCIPAL
 # ==============================================================================
@@ -532,13 +611,29 @@ def translate_text(
 
     match translation_process:
         case "gemini_flash":
-            translated = gemini_translate(segments, target, source, mode="flash")
+            try:
+                translated = gemini_translate(segments, target, source, mode="flash")
+            except Exception as e:
+                logger.error(f"Erreur globale Gemini Flash ({e}). Bascule de secours automatique...")
+                translated = translate_batch(segments, target_clean, chunk_size, source_clean)
         case "gemini_pro":
-            translated = gemini_translate(segments, target, source, mode="pro")
+            try:
+                translated = gemini_translate(segments, target, source, mode="pro")
+            except Exception as e:
+                logger.error(f"Erreur globale Gemini Pro ({e}). Bascule de secours automatique...")
+                translated = translate_batch(segments, target_clean, chunk_size, source_clean)
         case "groq_llama3":
-            translated = groq_translate(segments, target, source)
+            try:
+                translated = groq_translate(segments, target, source)
+            except Exception as e:
+                logger.error(f"Erreur globale Groq ({e}). Bascule de secours automatique...")
+                translated = translate_batch(segments, target_clean, chunk_size, source_clean)
         case "hf_zephyr_7b_beta":
-            translated = hf_zephyr_translate(segments, target, source)
+            try:
+                translated = hf_zephyr_translate(segments, target, source)
+            except Exception as e:
+                logger.error(f"Erreur globale Zephyr ({e}). Bascule de secours automatique...")
+                translated = translate_batch(segments, target_clean, chunk_size, source_clean)
         case "google_translator_batch":
             translated = translate_batch(segments, target_clean, chunk_size, source_clean)
         case "google_translator":
@@ -557,3 +652,4 @@ def translate_text(
         logger.info("Auto-Emotion Fish Audio: Balises d'émotions appliquées sur les segments traduits.")
 
     return translated
+
