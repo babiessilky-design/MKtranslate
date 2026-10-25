@@ -197,34 +197,46 @@ def parse_llm_response(raw_text, expected_len=None):
 
     return lines if lines else None
 
-def _single_translate(text, target_lang):
-    """Traduction de secours sécurisée d'une phrase unique avec plusieurs essais et temporisation anti-ban."""
+def _single_translate(text, target_lang, source_lang="en"):
+    """
+    Traduction de secours ultra-robuste avec bascule automatique multi-moteurs :
+    1. Google Translate
+    2. MyMemoryTranslator (contourne 100% des blocages d'IP Google Translate sur Colab)
+    """
     orig_text = str(text).strip()
     if not orig_text:
         return ""
     target_clean = fix_code_language(target_lang)
-    for attempt in range(3):
-        try:
-            tr = GoogleTranslator(source='auto', target=target_clean)
-            res = tr.translate(orig_text)
-            if res and not is_corrupted_translation(res):
-                return res.strip()
-        except Exception as e:
-            err_msg = str(e).lower()
-            if "too many requests" in err_msg or "allowed to make 5" in err_msg:
-                wait_time = 3.0 * (attempt + 1)
-                logger.warning(f"[_single_translate] Rate limit Google Translate détecté, pause anti-ban de {wait_time}s...")
-                time.sleep(wait_time)
-            else:
-                logger.warning(f"[_single_translate] Erreur tentative {attempt+1} pour '{orig_text[:25]}' vers '{target_clean}': {e}")
-                time.sleep(1.5 * (attempt + 1))
+    src_clean = fix_code_language(source_lang) if source_lang and source_lang != "auto" else "en"
+
+    # 1. Tentative Google Translate
+    try:
+        tr = GoogleTranslator(source='auto', target=target_clean)
+        res = tr.translate(orig_text)
+        if res and not is_corrupted_translation(res):
+            return res.strip()
+    except Exception as e:
+        logger.warning(f"[_single_translate] Google Translate bloqué ({e}). Bascule immédiate sur MyMemory...")
+
+    # 2. Bascule automatique MyMemory (serveur indépendant, non affecté par le ban IP Google)
+    try:
+        from deep_translator import MyMemoryTranslator
+        mm = MyMemoryTranslator(source=src_clean, target=target_clean)
+        res = mm.translate(orig_text)
+        if res and not is_corrupted_translation(res):
+            logger.info(f"[_single_translate] Traduction MyMemory réussie pour '{orig_text[:25]}'")
+            return res.strip()
+    except Exception as e2:
+        logger.warning(f"[_single_translate] MyMemory a échoué ({e2}).")
+
     return orig_text
 
-def _safe_batch_translate(batch, target_lang):
+def _safe_batch_translate(batch, target_lang, source_lang="en"):
     """
     Traduction de secours groupée ultra-robuste :
-    Fusionne toutes les phrases du lot avec ' ||||| ' en UNE SEULE requête HTTP à Google Translate.
-    Évite absolument le blocage IP car 1 seule requête HTTP est émise pour les 25 phrases.
+    1. Si GROQ est configuré : Groq LLaMA-3.3 70B instantané
+    2. Concaténation Google Translate (1 seule requête HTTP réelle pour tout le lot)
+    3. Bascule MyMemoryTranslator si Google Translate est bloqué sur Colab
     """
     target_clean = fix_code_language(target_lang)
     texts = [seg["text"].strip() if seg.get("text") else "" for seg in batch]
@@ -234,7 +246,23 @@ def _safe_batch_translate(batch, target_lang):
 
     non_empty_texts = [texts[i] for i in non_empty_indices]
 
-    # 1. Tentative groupée par fusion (1 SEULE requête HTTP réelle pour tout le lot)
+    # 1. Secours Groq si clé disponible (ultra-rapide, 0 ban IP)
+    if os.getenv("GROQ_API_KEY") or os.getenv("groq_api_key"):
+        try:
+            logger.info("Secours groupé : tentative via Groq LLaMA-3.3...")
+            groq_batch = [{"text": t} for t in non_empty_texts]
+            groq_res = groq_translate(groq_batch, target_clean, source_lang)
+            if groq_res and len(groq_res) == len(non_empty_texts):
+                clean_res = list(texts)
+                for idx, item in zip(non_empty_indices, groq_res):
+                    txt = item.get("text", "")
+                    clean_res[idx] = txt if txt and not is_corrupted_translation(txt) else texts[idx]
+                logger.info(f"Secours groupé Groq réussi ({len(non_empty_texts)} phrases).")
+                return clean_res
+        except Exception as ge:
+            logger.warning(f"Secours groupé Groq a échoué ({ge}).")
+
+    # 2. Tentative groupée par fusion Google Translate (1 SEULE requête HTTP réelle pour tout le lot)
     try:
         delimiter = " ||||| "
         merged_text = delimiter.join(non_empty_texts)
@@ -242,7 +270,8 @@ def _safe_batch_translate(batch, target_lang):
         translated_merged = tr.translate(merged_text)
         
         if translated_merged and not is_corrupted_translation(translated_merged):
-            parts = [p.strip() for p in translated_merged.split("|||||")]
+            norm = translated_merged.replace(" | | | | | ", "|||||").replace(" |||| ", "|||||")
+            parts = [p.strip() for p in norm.split("|||||")]
             if len(parts) == len(non_empty_texts):
                 clean_res = list(texts)
                 for idx, part in zip(non_empty_indices, parts):
@@ -252,13 +281,13 @@ def _safe_batch_translate(batch, target_lang):
             else:
                 logger.warning(f"Secours fusion: mismatch de segments ({len(parts)} reçus pour {len(non_empty_texts)} envoyés).")
     except Exception as e:
-        logger.warning(f"Secours groupé Google par fusion a échoué ({e}).")
+        logger.warning(f"Secours groupé Google par fusion a échoué ({e}). Bascule sur MyMemory...")
 
-    # 2. Secours individuel sécurisé avec temporisation anti-ban (> 1.2 seconde d'écart)
+    # 3. Secours phrase par phrase avec bascule MyMemory automatique
     clean_res = list(texts)
     for i in non_empty_indices:
-        clean_res[i] = _single_translate(texts[i], target_clean)
-        time.sleep(1.2)
+        clean_res[i] = _single_translate(texts[i], target_clean, source_lang)
+        time.sleep(0.3)
     return clean_res
 
 # ==============================================================================
@@ -775,3 +804,4 @@ def translate_text(
         logger.info("Auto-Emotion Fish Audio: Balises d'émotions appliquées sur les segments traduits.")
 
     return translated
+
