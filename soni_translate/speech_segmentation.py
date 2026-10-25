@@ -547,7 +547,7 @@ def gemini_api_transcribe(
     Renvoie audio, result {"segments": [...], "language": ...}
     Chaque segment contient: start, end, text, speaker
     """
-    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("google_api_key")
+    api_key = (os.environ.get("GOOGLE_API_KEY") or os.environ.get("google_api_key") or "").split(',')[0].strip()
     if not api_key:
         raise ValueError("Erreur : La variable d'environnement GOOGLE_API_KEY est manquante pour utiliser Gemini Transcribe.")
 

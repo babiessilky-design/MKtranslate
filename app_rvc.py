@@ -482,7 +482,7 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
         elif voice.startswith("Gemini/"):
             gemini_voice = voice.split("/")[-1]
             try:
-                api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("google_api_key")
+                api_key = (os.getenv("GOOGLE_API_KEY") or os.getenv("google_api_key") or "").split(',')[0].strip()
                 gemini_model = os.getenv("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts")
                 client = genai.Client(api_key=api_key)
                 config = types.GenerateContentConfig(

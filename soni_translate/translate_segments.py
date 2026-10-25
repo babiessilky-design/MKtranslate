@@ -64,36 +64,37 @@ def get_system_prompt(target_lang):
         return f"""Tu es un traducteur expert en doublage vidéo dynamique pour YouTube et le cinéma.
 
 RÈGLES OBLIGATOIRES :
-1. Traduis chaque ligne fidèlement VERS LA LANGUE SUIVANTE : {lang_instruction}.
+1. Traduis chaque réplique fidèlement VERS LA LANGUE SUIVANTE : {lang_instruction}.
 2. Le style doit être naturel, fluide, dynamique et parlé (adapté à un public jeune).
 3. Conserve impérativement le sens exact, les nuances affectives et le tutoiement/langage familier si applicable.
-4. Traduis TOUTES les phrases sans exception, sans commentaires ni notes.
+4. Traduis TOUTES les phrases sans exception, sans aucun commentaire ni note.
 5. DIRECTIVE OBLIGATOIRE ÉMOTIONS ET JEU D'ACTEUR (FISH AUDIO) :
 Pour CHAQUE réplique expressive, insère impérativement au tout début la balise d'émotion Fish Audio correspondante parmi :
-- [excited] pour toute phrase dynamique, enthousiaste, joyeuse ou avec un point d'exclamation (ex: [excited] Regarde ce qu'on a trouvé !)
-- [laughing] pour tout rire, réplique amusante, blague ou amusement (ex: [laughing] C'est trop drôle haha !)
-- [whisper] pour tout chuchotement, confidence, secret ou voix basse (ex: [whisper] Chut, fais pas de bruit...)
-- [angry] pour toute réplique énervée, cri, dispute, ordre sec ou tension (ex: [angry] Arrête tout de suite !)
-- [surprised] pour toute surprise, question choquée ou stupéfaction (ex: [surprised] Quoi ?! Tu es sérieux ?)
-- [sad] pour toute tristesse, regret, désolation ou compassion (ex: [sad] C'est vraiment triste...)
-- [sigh] pour un soupir, un soulagement ou de la fatigue (ex: [sigh] Ouf, enfin réussi...)
-- [calm] pour une explication calme, posée ou rassurante
+- [excited], [laughing], [whisper], [angry], [surprised], [sad], [sigh], [calm]
 Laisse sans balise uniquement les énoncés factuels sans aucune charge affective.
-6. Renvoie STRICTEMENT un tableau JSON de chaînes de caractères.
-Exemple :
-["[excited] C'est incroyable, on a enfin réussi !", "[whisper] Fais attention, ils nous cherchent...", "[surprised] Attends, tu plaisantes ?"]"""
+6. Renvoie STRICTEMENT un objet JSON avec les numéros de ligne sous forme de clés ('1', '2', ...) associées à leur traduction.
+Exemple pour 3 phrases :
+{{
+  "1": "[excited] C'est incroyable, on a enfin réussi !",
+  "2": "[whisper] Fais attention, ils nous cherchent...",
+  "3": "[surprised] Attends, tu plaisantes ?"
+}}"""
 
     return f"""Tu es un traducteur expert en doublage vidéo pour YouTube.
 
 RÈGLES OBLIGATOIRES :
-1. Traduis chaque ligne fidèlement VERS LA LANGUE SUIVANTE : {lang_instruction}.
+1. Traduis chaque réplique fidèlement VERS LA LANGUE SUIVANTE : {lang_instruction}.
 2. Le style doit être naturel, fluide et parlé (adapté à un public jeune).
 3. Le texte en {lang_instruction} doit être court et percutant pour coller au rythme de la vidéo.
 4. Conserve impérativement le sens exact, les émotions et le niveau de langage (tutoiement/familier si applicable).
 5. Traduis TOUTES les phrases sans exception, sans aucun commentaire ou texte hors du JSON.
-6. Renvoie la traduction STRICTEMENT sous forme d'un tableau JSON de chaînes de caractères.
-Exemple :
-["Traduction 1", "Traduction 2", "Traduction 3"]"""
+6. Renvoie STRICTEMENT un objet JSON avec les numéros de ligne sous forme de clés ('1', '2', ...) associées à leur traduction.
+Exemple pour 3 phrases :
+{{
+  "1": "Traduction phrase 1",
+  "2": "Traduction phrase 2",
+  "3": "Traduction phrase 3"
+}}"""
 
 # ==============================================================================
 # FILTRE ANTI-PAGE D'ERREUR SERVEUR
@@ -239,7 +240,7 @@ def _batch_with_context(segments, batch_size, translate_func, desc, target_lang)
             f"{sys_prompt}\n\n"
             f"{context_part}"
             f"Lignes à traduire ({batch_len} phrases) :\n{lines_text}\n\n"
-            f"Renvoie STRICTEMENT un tableau JSON de {batch_len} chaînes de caractères (une pour chaque ligne ci-dessus) :"
+            f"Renvoie STRICTEMENT un objet JSON avec les clés de '1' à '{batch_len}' associées à leur traduction respective :"
         )
 
         translated_lines = None
@@ -326,24 +327,58 @@ def get_gemini_safety_settings():
         return None
 
 # ==============================================================================
-# GEMINI (CASCADE DYNAMIQUE & MÉMORISATION SANS CENSURE)
+# GESTION DES CLÉS & RATE LIMITING INTELLIGENT GEMINI (15 RPM / QUOTA PROTÉGÉ)
 # ==============================================================================
 _ACTIVE_GEMINI_INDEX = 0
+_ACTIVE_KEY_INDEX = 0
+_LAST_GEMINI_CALL_TIME = 0.0
+
+def get_gemini_api_keys():
+    """Récupère une ou plusieurs clés d'API Google Gemini (supporte le multi-clés séparé par virgule)."""
+    raw = os.getenv("GOOGLE_API_KEY") or os.getenv("google_api_key") or ""
+    keys = []
+    for part in re.split(r'[,;\n]+', raw):
+        k = part.strip()
+        if k and k not in keys:
+            keys.append(k)
+    for i in range(1, 10):
+        extra = os.getenv(f"GOOGLE_API_KEY_{i}") or os.getenv(f"google_api_key_{i}")
+        if extra and extra.strip() and extra.strip() not in keys:
+            keys.append(extra.strip())
+    return keys
+
+def _wait_for_gemini_pacing(min_interval=4.1):
+    """
+    Régulateur de débit préventif :
+    Google AI Studio autorise 15 requêtes/minute (1 requête toutes les 4 secondes).
+    Cet espacement garantit qu'on ne dépasse JAMAIS les 15 RPM, même sur 1 heure de vidéo !
+    """
+    global _LAST_GEMINI_CALL_TIME
+    now = time.time()
+    elapsed = now - _LAST_GEMINI_CALL_TIME
+    if elapsed < min_interval:
+        time.sleep(min_interval - elapsed)
+    _LAST_GEMINI_CALL_TIME = time.time()
 
 def gemini_translate(segments, target, source=None, mode="flash"):
-    global _ACTIVE_GEMINI_INDEX
-    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("google_api_key") or ""
-    if not api_key:
+    global _ACTIVE_GEMINI_INDEX, _ACTIVE_KEY_INDEX
+    keys = get_gemini_api_keys()
+    if not keys:
         logger.error("❌ GEMINI: Clé GOOGLE_API_KEY manquante dans l'environnement !")
         return translate_iterative(segments, target, source)
 
-    client = genai.Client(api_key=api_key)
-
-    # Modèles actifs de secours (modèles Google AI Studio officiels en priorité)
+    # Modèles ultra-rapides et économes en quota (zéro overhead de pensée en priorité absolue)
     if mode == "pro":
-        candidates = ["gemini-2.5-pro", "gemini-1.5-pro", "gemini-2.0-pro-exp-02-05", "gemini-3.1-pro-preview", "gemini-3.1-pro"]
+        candidates = ["gemini-1.5-pro", "gemini-2.5-pro", "gemini-2.0-pro-exp-02-05", "gemini-3.1-pro-preview"]
     else:
-        candidates = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.7-flash"]
+        candidates = [
+            "gemini-2.0-flash",       # Instantané, zéro token de pensée, très économe en quota
+            "gemini-1.5-flash",       # Quota gratuit massif (1M TPM, 1500 RPD), modèle de référence
+            "gemini-2.5-flash",       # Modèle 2.5
+            "gemini-2.5-flash-lite",
+            "gemini-3.5-flash",
+            "gemini-3.8-flash",
+        ]
 
     # Prompt système dynamique par langue
     sys_prompt = get_system_prompt(target)
@@ -354,7 +389,13 @@ def gemini_translate(segments, target, source=None, mode="flash"):
         "response_mime_type": "application/json",
         "system_instruction": sys_prompt
     }
-    
+
+    # Désactiver les tokens de pensée (thinking) pour économiser 90% des tokens et accélérer
+    try:
+        config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+    except Exception:
+        pass
+
     safety = get_gemini_safety_settings()
     if safety:
         config_kwargs["safety_settings"] = safety
@@ -362,29 +403,56 @@ def gemini_translate(segments, target, source=None, mode="flash"):
     config = types.GenerateContentConfig(**config_kwargs)
 
     def call_gemini(full_prompt, batch_len):
-        global _ACTIVE_GEMINI_INDEX
+        global _ACTIVE_GEMINI_INDEX, _ACTIVE_KEY_INDEX
         last_err = None
 
+        current_keys = get_gemini_api_keys() or keys
+        num_keys = len(current_keys)
         num_models = len(candidates)
-        for offset in range(num_models):
-            idx = (_ACTIVE_GEMINI_INDEX + offset) % num_models
-            m_id = candidates[idx]
-            try:
-                response = client.models.generate_content(model=m_id, contents=full_prompt, config=config)
-                res = parse_llm_response(response.text, batch_len)
-                if res and len(res) > 0:
-                    _ACTIVE_GEMINI_INDEX = idx
-                    return res
-            except Exception as e:
-                last_err = e
-                logger.warning(f"Modèle '{m_id}' indisponible ({e}). Bascule immédiate sur le modèle suivant...")
-                continue
+
+        # Régulation automatique pour respecter la limite de 15 RPM
+        _wait_for_gemini_pacing(min_interval=4.1)
+
+        for key_offset in range(num_keys):
+            k_idx = (_ACTIVE_KEY_INDEX + key_offset) % num_keys
+            current_key = current_keys[k_idx]
+            current_client = genai.Client(api_key=current_key)
+
+            for offset in range(num_models):
+                idx = (_ACTIVE_GEMINI_INDEX + offset) % num_models
+                m_id = candidates[idx]
+                try:
+                    response = current_client.models.generate_content(
+                        model=m_id, 
+                        contents=full_prompt, 
+                        config=config
+                    )
+                    res = parse_llm_response(response.text, batch_len)
+                    if res and len(res) > 0:
+                        _ACTIVE_GEMINI_INDEX = idx
+                        _ACTIVE_KEY_INDEX = k_idx
+                        return res
+                except Exception as e:
+                    last_err = e
+                    err_str = str(e).lower()
+                    if "429" in err_str or "resource_exhausted" in err_str or "quota" in err_str:
+                        logger.warning(f"Quota/Rate-limit atteint sur '{m_id}' (Clé #{k_idx+1}).")
+                        if num_keys > 1 and key_offset < num_keys - 1:
+                            logger.info("Bascule immédiate sur la clé API Gemini suivante...")
+                            break
+                        else:
+                            time.sleep(5.0)
+                            continue
+                    else:
+                        logger.warning(f"Modèle '{m_id}' indisponible ({e}). Essai du suivant...")
+                        continue
 
         if last_err:
             raise last_err
         return None
 
-    return _batch_with_context(segments, 10, call_gemini, f"Translating (Gemini {mode.upper()} Uncensored)", target)
+    # Paquets de 25 phrases : réduit le nombre de requêtes de 60% (seulement ~40 requêtes pour 1 heure de vidéo !)
+    return _batch_with_context(segments, 25, call_gemini, f"Translating (Gemini {mode.upper()} Optimized)", target)
 
 # ==============================================================================
 # GROQ (LLaMA-3.3 70B)
