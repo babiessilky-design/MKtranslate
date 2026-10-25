@@ -210,44 +210,55 @@ def _single_translate(text, target_lang):
             if res and not is_corrupted_translation(res):
                 return res.strip()
         except Exception as e:
-            logger.warning(f"[_single_translate] Erreur tentative {attempt+1} pour '{orig_text[:25]}' vers '{target_clean}': {e}")
-            time.sleep(1.5 * (attempt + 1))
+            err_msg = str(e).lower()
+            if "too many requests" in err_msg or "allowed to make 5" in err_msg:
+                wait_time = 3.0 * (attempt + 1)
+                logger.warning(f"[_single_translate] Rate limit Google Translate détecté, pause anti-ban de {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                logger.warning(f"[_single_translate] Erreur tentative {attempt+1} pour '{orig_text[:25]}' vers '{target_clean}': {e}")
+                time.sleep(1.5 * (attempt + 1))
     return orig_text
 
 def _safe_batch_translate(batch, target_lang):
     """
-    Traduction de secours groupée via translate_batch :
-    Envoie l'ensemble des phrases du lot en UN SEUL appel HTTP à Google Translate.
-    Évite complètement le blocage IP de Google (5 req/sec) et traduit instantanément le batch complet.
+    Traduction de secours groupée ultra-robuste :
+    Fusionne toutes les phrases du lot avec ' ||||| ' en UNE SEULE requête HTTP à Google Translate.
+    Évite absolument le blocage IP car 1 seule requête HTTP est émise pour les 25 phrases.
     """
     target_clean = fix_code_language(target_lang)
     texts = [seg["text"].strip() if seg.get("text") else "" for seg in batch]
-    non_empty = [t for t in texts if t]
-    if not non_empty:
+    non_empty_indices = [i for i, t in enumerate(texts) if t]
+    if not non_empty_indices:
         return texts
 
-    # 1. Tentative groupée en 1 seule requête pour tout le lot (ultra-rapide)
-    try:
-        tr = GoogleTranslator(source='auto', target=target_clean)
-        res_list = tr.translate_batch(texts)
-        if res_list and len(res_list) == len(texts):
-            clean_res = []
-            for r, orig in zip(res_list, texts):
-                txt = str(r).strip() if r else orig
-                clean_res.append(txt if not is_corrupted_translation(txt) else orig)
-            logger.info(f"Secours groupé Google Translate réussi ({len(clean_res)} phrases en 1 seul appel).")
-            return clean_res
-    except Exception as e:
-        logger.warning(f"translate_batch groupé direct a échoué ({e}), passage en secours individuel temporisé...")
+    non_empty_texts = [texts[i] for i in non_empty_indices]
 
-    # 2. Secours individuel sécurisé avec temporisation anti-ban (> 1 seconde d'écart)
-    clean_res = []
-    for s in texts:
-        if s:
-            clean_res.append(_single_translate(s, target_clean))
-            time.sleep(1.0)
-        else:
-            clean_res.append("")
+    # 1. Tentative groupée par fusion (1 SEULE requête HTTP réelle pour tout le lot)
+    try:
+        delimiter = " ||||| "
+        merged_text = delimiter.join(non_empty_texts)
+        tr = GoogleTranslator(source='auto', target=target_clean)
+        translated_merged = tr.translate(merged_text)
+        
+        if translated_merged and not is_corrupted_translation(translated_merged):
+            parts = [p.strip() for p in translated_merged.split("|||||")]
+            if len(parts) == len(non_empty_texts):
+                clean_res = list(texts)
+                for idx, part in zip(non_empty_indices, parts):
+                    clean_res[idx] = part if not is_corrupted_translation(part) else texts[idx]
+                logger.info(f"Secours groupé Google (fusion 1 requête HTTP) réussi ({len(non_empty_texts)} phrases).")
+                return clean_res
+            else:
+                logger.warning(f"Secours fusion: mismatch de segments ({len(parts)} reçus pour {len(non_empty_texts)} envoyés).")
+    except Exception as e:
+        logger.warning(f"Secours groupé Google par fusion a échoué ({e}).")
+
+    # 2. Secours individuel sécurisé avec temporisation anti-ban (> 1.2 seconde d'écart)
+    clean_res = list(texts)
+    for i in non_empty_indices:
+        clean_res[i] = _single_translate(texts[i], target_clean)
+        time.sleep(1.2)
     return clean_res
 
 # ==============================================================================
@@ -411,9 +422,9 @@ def gemini_translate(segments, target, source=None, mode="flash"):
         candidates = ["gemini-3.1-pro-preview", "gemini-3.1-pro"]
     else:
         candidates = [
-            "gemini-3.8-flash",       # Modèle officiel actif recommandé par Google
-            "gemini-3.5-flash",       # Modèle officiel actif
-            "gemini-3.5-flash-lite",  # Modèle officiel actif ultra-rapide
+            "gemini-3.5-flash-lite",  # Modèle officiel actif haute fréquence (quota généreux, ultra-rapide)
+            "gemini-3.5-flash",       # Modèle officiel actif standard
+            "gemini-3.8-flash",       # Modèle officiel actif raisonnement
         ]
 
     # Prompt système dynamique par langue
@@ -426,12 +437,7 @@ def gemini_translate(segments, target, source=None, mode="flash"):
         "system_instruction": sys_prompt
     }
 
-    # Désactiver les tokens de pensée (thinking) pour économiser 90% des tokens et accélérer
-    try:
-        config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
-    except Exception:
-        pass
-
+    # Ne pas spécifier thinking_budget=0 car Gemini 3.x renvoie 400 INVALID_ARGUMENT
     safety = get_gemini_safety_settings()
     if safety:
         config_kwargs["safety_settings"] = safety
@@ -473,7 +479,7 @@ def gemini_translate(segments, target, source=None, mode="flash"):
                     last_err = e
                     err_str = str(e).lower()
                     if "429" in err_str or "resource_exhausted" in err_str or "quota" in err_str:
-                        logger.warning(f"Quota/Rate-limit atteint sur '{m_id}' (Clé #{k_idx+1}).")
+                        logger.warning(f"Quota/Rate-limit atteint sur '{m_id}' (Clé #{k_idx+1}) : {e}")
                         if num_keys > 1 and key_offset < num_keys - 1:
                             logger.info("Bascule immédiate sur la clé API Gemini suivante...")
                             break
@@ -482,6 +488,9 @@ def gemini_translate(segments, target, source=None, mode="flash"):
                             continue
                     elif "404" in err_str or "not_found" in err_str:
                         logger.warning(f"Modèle '{m_id}' indisponible (404). Essai du modèle suivant...")
+                        continue
+                    elif "400" in err_str or "invalid" in err_str:
+                        logger.warning(f"Modèle '{m_id}' argument rejeté ({e}). Essai du suivant...")
                         continue
                     else:
                         logger.warning(f"Modèle '{m_id}' indisponible ({e}). Essai du suivant...")
@@ -723,6 +732,12 @@ def translate_text(
                 translated = gemini_translate(segments, target, source, mode="flash")
             except Exception as e:
                 logger.error(f"Erreur globale Gemini Flash ({e}). Bascule de secours automatique...")
+                if os.getenv("GROQ_API_KEY") or os.getenv("groq_api_key"):
+                    try:
+                        logger.info("Bascule de secours automatique sur Groq LLaMA-3.3 70B...")
+                        return groq_translate(segments, target, source)
+                    except Exception as ge:
+                        logger.warning(f"Secours Groq échoué ({ge}).")
                 translated = translate_batch(segments, target_clean, chunk_size, source_clean)
         case "gemini_pro":
             try:
