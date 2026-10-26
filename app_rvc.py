@@ -3927,7 +3927,6 @@ if __name__ == "__main__":
         max_threads=40,
         share=args.public_url,
         show_error=True,
-        show_api=False,
         quiet=False,
         debug=(True if logger.isEnabledFor(logging.DEBUG) else False),
     )
