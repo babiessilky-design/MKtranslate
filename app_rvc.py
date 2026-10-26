@@ -2855,7 +2855,7 @@ def create_gui(theme, logs_in_gui=False):
             )
             with gr.Row():
                 with gr.Column(scale=1):
-                    fastdub_video_input = gr.Video(label="1. Fichier Vidéo Source")
+                    fastdub_media_input = gr.File(label="1. Fichier Vidéo ou Audio Source (MP4, MKV, MP3, WAV...)", type="filepath")
                 with gr.Column(scale=1):
                     with gr.Row():
                         fastdub_asr_model = gr.Dropdown(
@@ -2917,17 +2917,20 @@ def create_gui(theme, logs_in_gui=False):
                         fastdub_tts_engine = gr.Dropdown(["fish_audio", "edge_tts"], value="fish_audio", label="Moteur TTS")
                         fastdub_bg_volume = gr.Slider(minimum=0.0, maximum=0.5, value=0.15, step=0.05, label="Volume fond sonore original (Ducking)")
 
-                    btn_fastdub_render = gr.Button("🎬 3. Générer le Doublage & la Vidéo Finale 🚀", variant="primary")
+                    btn_fastdub_render = gr.Button("🎬 3. Générer le Doublage & le Média Final 🚀", variant="primary")
                     fastdub_status_render = gr.Markdown("")
 
                 with gr.Column():
                     fastdub_video_output = gr.Video(label="Vidéo finale FastDub")
+                    fastdub_audio_output = gr.Audio(label="Audio final FastDub (si source audio)", type="filepath")
 
             # Connexion des callbacks FastDub
-            def run_fastdub_transcribe(video_path, asr_model, src_lang, progress=gr.Progress()):
-                if not video_path:
+            def run_fastdub_transcribe(media_path, asr_model, src_lang, progress=gr.Progress()):
+                if not media_path:
                     raise gr.Error("Veuillez d'abord fournir une vidéo ou un fichier audio.")
-                vpath = video_path if isinstance(video_path, str) else getattr(video_path, "name", str(video_path))
+                if isinstance(media_path, list):
+                    media_path = media_path[0]
+                vpath = media_path if isinstance(media_path, str) else getattr(media_path, "name", str(media_path))
                 from soni_translate.fastdub import transcribe_media_to_srt
                 clean_lang = "en"
                 if "fr" in str(src_lang).lower(): clean_lang = "fr"
@@ -2946,14 +2949,16 @@ def create_gui(theme, logs_in_gui=False):
                 adapted = adapt_script_gemini(srt_text, model_name=model_name)
                 return adapted
 
-            def run_fastdub_render(video_path, script_text, spk1_voice, spk2_voice, tts_engine, bg_vol, progress=gr.Progress()):
-                if not video_path:
-                    raise gr.Error("Fichier vidéo source manquant.")
+            def run_fastdub_render(media_path, script_text, spk1_voice, spk2_voice, tts_engine, bg_vol, progress=gr.Progress()):
+                if not media_path:
+                    raise gr.Error("Fichier vidéo ou audio source manquant.")
                 if not script_text or not script_text.strip():
                     raise gr.Error("Le script de doublage est vide.")
-                vpath = video_path if isinstance(video_path, str) else getattr(video_path, "name", str(video_path))
+                if isinstance(media_path, list):
+                    media_path = media_path[0]
+                vpath = media_path if isinstance(media_path, str) else getattr(media_path, "name", str(media_path))
                 from soni_translate.fastdub import render_fastdub_video
-                out_vid = render_fastdub_video(
+                out_media = render_fastdub_video(
                     media_path=vpath,
                     script_text=script_text,
                     speaker1_voice=spk1_voice,
@@ -2962,11 +2967,12 @@ def create_gui(theme, logs_in_gui=False):
                     background_volume=float(bg_vol),
                     progress=progress
                 )
-                return out_vid, "🎉 **Doublage FastDub terminé avec succès !**"
+                is_vid = str(out_media).lower().endswith((".mp4", ".mkv", ".mov", ".avi", ".webm"))
+                return (out_media if is_vid else None), (out_media if not is_vid else None), "🎉 **Doublage FastDub terminé avec succès !**"
 
             btn_fastdub_transcribe.click(
                 fn=run_fastdub_transcribe,
-                inputs=[fastdub_video_input, fastdub_asr_model, fastdub_src_lang],
+                inputs=[fastdub_media_input, fastdub_asr_model, fastdub_src_lang],
                 outputs=[fastdub_srt_box, fastdub_status_asr]
             )
 
@@ -2979,14 +2985,14 @@ def create_gui(theme, logs_in_gui=False):
             btn_fastdub_render.click(
                 fn=run_fastdub_render,
                 inputs=[
-                    fastdub_video_input,
+                    fastdub_media_input,
                     fastdub_dub_script_box,
                     fastdub_spk1_voice,
                     fastdub_spk2_voice,
                     fastdub_tts_engine,
                     fastdub_bg_volume
                 ],
-                outputs=[fastdub_video_output, fastdub_status_render]
+                outputs=[fastdub_video_output, fastdub_audio_output, fastdub_status_render]
             )
 
         with gr.Tab(lg_conf["tab_docs"]):

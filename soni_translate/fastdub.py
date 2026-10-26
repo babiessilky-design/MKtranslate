@@ -486,30 +486,56 @@ def render_fastdub_video(
     ]
     subprocess.run(cmd_mix, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
 
-    if progress:
-        progress(0.95, desc="Rendu vidéo final (Muxing instantané -c:v copy)...")
+    def has_video_stream(fpath):
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=codec_type",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            fpath
+        ]
+        try:
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            return "video" in res.stdout.lower()
+        except Exception:
+            ext = os.path.splitext(fpath)[1].lower()
+            return ext in [".mp4", ".mkv", ".mov", ".avi", ".webm", ".flv", ".wmv"]
 
-    # Muxing vidéo instantané sans ré-encodage vidéo (-c:v copy)
     output_dir = "outputs"
     os.makedirs(output_dir, exist_ok=True)
     base_name = os.path.splitext(os.path.basename(media_path))[0]
-    final_video_path = os.path.join(output_dir, f"{base_name}_FastDub.mp4")
+    is_video = has_video_stream(media_path)
 
-    cmd_mux = [
-        "ffmpeg", "-y",
-        "-i", media_path,
-        "-i", mixed_audio_wav,
-        "-c:v", "copy",
-        "-c:a", "aac", "-b:a", "192k",
-        "-map", "0:v:0",
-        "-map", "1:a:0",
-        "-shortest",
-        final_video_path
-    ]
-    subprocess.run(cmd_mux, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    if is_video:
+        if progress:
+            progress(0.95, desc="Rendu vidéo final (Muxing instantané -c:v copy)...")
+        final_output_path = os.path.join(output_dir, f"{base_name}_FastDub.mp4")
+        cmd_mux = [
+            "ffmpeg", "-y",
+            "-i", media_path,
+            "-i", mixed_audio_wav,
+            "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "192k",
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-shortest",
+            final_output_path
+        ]
+        subprocess.run(cmd_mux, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    else:
+        if progress:
+            progress(0.95, desc="Rendu audio final (Encodage MP3)...")
+        final_output_path = os.path.join(output_dir, f"{base_name}_FastDub.mp3")
+        cmd_mux = [
+            "ffmpeg", "-y",
+            "-i", mixed_audio_wav,
+            "-c:a", "libmp3lame", "-b:a", "192k",
+            final_output_path
+        ]
+        subprocess.run(cmd_mux, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
 
-    logger.info(f"FastDub terminé avec succès ! Vidéo générée : {final_video_path}")
+    logger.info(f"FastDub terminé avec succès ! Média généré : {final_output_path}")
     if progress:
         progress(1.0, desc="FastDub terminé avec succès !")
 
-    return final_video_path
+    return final_output_path
