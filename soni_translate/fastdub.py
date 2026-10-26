@@ -119,7 +119,7 @@ def srt_time_to_seconds(time_str):
 # ==============================================================================
 # 1. TRANSCRIPTION BRUTE VERS FORMAT SRT (WHISPER)
 # ==============================================================================
-def transcribe_media_to_srt(media_path, asr_model="whisper_large_v3", source_lang="en", compute_type="float16"):
+def transcribe_media_to_srt(media_path, asr_model="large-v3", source_lang="en", compute_type="float16"):
     """
     Extrait l'audio d'une vidéo/audio et génère la transcription brute au format SRT.
     """
@@ -137,11 +137,31 @@ def transcribe_media_to_srt(media_path, asr_model="whisper_large_v3", source_lan
     ]
     subprocess.run(cmd_extract, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
 
-    logger.info(f"FastDub ASR : Lancement de la transcription ({asr_model})...")
-    from soni_translate.speech_segmentation import transcribe_speech
+    # Normalisation du modèle ASR pour correspondre exactement à ASR_MODEL_OPTIONS
+    raw_asr = str(asr_model).lower().strip()
+    if "gemini" in raw_asr:
+        asr_selected = "Gemini 3.5 Transcribe"
+    elif "large-v3" in raw_asr or "large_v3" in raw_asr:
+        asr_selected = "large-v3"
+    elif "large-v2" in raw_asr or "large_v2" in raw_asr:
+        asr_selected = "large-v2"
+    elif "medium" in raw_asr:
+        asr_selected = "medium"
+    elif "small" in raw_asr:
+        asr_selected = "small"
+    elif "base" in raw_asr:
+        asr_selected = "base"
+    elif "tiny" in raw_asr:
+        asr_selected = "tiny"
+    else:
+        asr_selected = "large-v3"
 
-    # Normalisation du modèle ASR
-    asr_selected = "Gemini 3.5 Transcribe" if "gemini" in str(asr_model).lower() else "whisper_large_v3"
+    import torch
+    if compute_type == "float16" and not torch.cuda.is_available():
+        compute_type = "int8"
+
+    logger.info(f"FastDub ASR : Lancement de la transcription ({asr_selected}, {compute_type})...")
+    from soni_translate.speech_segmentation import transcribe_speech
     
     _, result = transcribe_speech(
         audio_wav=temp_wav,

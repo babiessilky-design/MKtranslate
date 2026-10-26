@@ -2859,9 +2859,9 @@ def create_gui(theme, logs_in_gui=False):
                 with gr.Column(scale=1):
                     with gr.Row():
                         fastdub_asr_model = gr.Dropdown(
-                            ["whisper_large_v3", "Gemini 3.5 Transcribe"],
-                            value="whisper_large_v3",
-                            label="Moteur de transcription"
+                            ["large-v3", "large-v2", "medium", "small", "base", "Gemini 3.5 Transcribe"],
+                            value="large-v3",
+                            label="Moteur de transcription (Whisper)"
                         )
                         fastdub_src_lang = gr.Dropdown(
                             ["English (en)", "French (fr)", "Spanish (es)", "Auto"],
