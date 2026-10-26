@@ -3817,7 +3817,7 @@ if __name__ == "__main__":
     _cached_custom_tts_list = None
 
     def patched_tts_list_method(force_refresh=False):
-        nonlocal _cached_custom_tts_list
+        global _cached_custom_tts_list
         if _cached_custom_tts_list is not None and not force_refresh:
             return _cached_custom_tts_list
 
