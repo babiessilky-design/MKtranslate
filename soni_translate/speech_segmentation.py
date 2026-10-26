@@ -11,6 +11,7 @@ import os
 import json
 import re
 import time
+import copy
 import soundfile as sf
 from IPython.utils import capture # noqa
 from .language_configuration import EXTRA_ALIGN, INVERTED_LANGUAGES

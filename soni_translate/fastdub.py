@@ -557,8 +557,12 @@ def render_fastdub_video(
     # Initialisation du TTS Provider
     fish_provider = None
     if tts_engine == "fish_audio":
-        from soni_translate.tts_providers.fish_audio import FishAudioTTSProvider
-        fish_provider = FishAudioTTSProvider()
+        try:
+            from soni_translate.tts_providers.fish_audio import FishAudioProvider
+            fish_provider = FishAudioProvider()
+        except ImportError:
+            from soni_translate.tts_providers.fish_audio import FishAudioTTSProvider
+            fish_provider = FishAudioTTSProvider()
 
     total_diag = len(dialogues)
     for idx, diag in enumerate(dialogues):

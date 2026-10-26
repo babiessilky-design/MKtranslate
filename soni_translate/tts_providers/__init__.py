@@ -1,4 +1,9 @@
 from .custom import CustomCloningProvider
+try:
+    from .fish_audio import FishAudioProvider, FishAudioTTSProvider
+except ImportError:
+    FishAudioProvider = None
+    FishAudioTTSProvider = None
 
 # Enregistrement de nos Providers actifs
 PROVIDERS_REGISTRY = {

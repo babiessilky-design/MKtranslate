@@ -459,3 +459,10 @@ class FishAudioProvider(BaseTTSProvider):
         silence_arr = np.zeros(int(sample_rate * float(seg_duration)), dtype=np.float32)
         sf.write(output_file, silence_arr, sample_rate)
         return False
+
+
+# Alias de compatibilité
+FishAudioTTSProvider = FishAudioProvider
+
+__all__ = ["FishAudioProvider", "FishAudioTTSProvider", "load_direct_codec"]
+
