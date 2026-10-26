@@ -2284,85 +2284,87 @@ def create_gui(theme, logs_in_gui=False):
                         }
                         return [value for value in visibility_dict.values()]
 
+                    shared_tts_voice_list = SoniTr.tts_info.tts_list()
+
                     tts_voice00 = gr.Dropdown(
-                        SoniTr.tts_info.tts_list(),
+                        shared_tts_voice_list,
                         value="en-US-EmmaMultilingualNeural-Female",
                         label=lg_conf["sk1"],
                         visible=True,
                         interactive=True,
                     )
                     tts_voice01 = gr.Dropdown(
-                        SoniTr.tts_info.tts_list(),
+                        shared_tts_voice_list,
                         value="en-US-AndrewMultilingualNeural-Male",
                         label=lg_conf["sk2"],
                         visible=True,
                         interactive=True,
                     )
                     tts_voice02 = gr.Dropdown(
-                        SoniTr.tts_info.tts_list(),
+                        shared_tts_voice_list,
                         value="en-US-AvaMultilingualNeural-Female",
                         label=lg_conf["sk3"],
                         visible=False,
                         interactive=True,
                     )
                     tts_voice03 = gr.Dropdown(
-                        SoniTr.tts_info.tts_list(),
+                        shared_tts_voice_list,
                         value="en-US-BrianMultilingualNeural-Male",
                         label=lg_conf["sk4"],
                         visible=False,
                         interactive=True,
                     )
                     tts_voice04 = gr.Dropdown(
-                        SoniTr.tts_info.tts_list(),
+                        shared_tts_voice_list,
                         value="de-DE-SeraphinaMultilingualNeural-Female",
                         label=lg_conf["sk4"],
                         visible=False,
                         interactive=True,
                     )
                     tts_voice05 = gr.Dropdown(
-                        SoniTr.tts_info.tts_list(),
+                        shared_tts_voice_list,
                         value="de-DE-FlorianMultilingualNeural-Male",
                         label=lg_conf["sk6"],
                         visible=False,
                         interactive=True,
                     )
                     tts_voice06 = gr.Dropdown(
-                        SoniTr.tts_info.tts_list(),
+                        shared_tts_voice_list,
                         value="fr-FR-VivienneMultilingualNeural-Female",
                         label=lg_conf["sk7"],
                         visible=False,
                         interactive=True,
                     )
                     tts_voice07 = gr.Dropdown(
-                        SoniTr.tts_info.tts_list(),
+                        shared_tts_voice_list,
                         value="fr-FR-RemyMultilingualNeural-Male",
                         label=lg_conf["sk8"],
                         visible=False,
                         interactive=True,
                     )
                     tts_voice08 = gr.Dropdown(
-                        SoniTr.tts_info.tts_list(),
+                        shared_tts_voice_list,
                         value="en-US-EmmaMultilingualNeural-Female",
                         label=lg_conf["sk9"],
                         visible=False,
                         interactive=True,
                     )
                     tts_voice09 = gr.Dropdown(
-                        SoniTr.tts_info.tts_list(),
+                        shared_tts_voice_list,
                         value="en-US-AndrewMultilingualNeural-Male",
                         label=lg_conf["sk10"],
                         visible=False,
                         interactive=True,
                     )
                     tts_voice10 = gr.Dropdown(
-                        SoniTr.tts_info.tts_list(),
+                        shared_tts_voice_list,
                         value="en-US-EmmaMultilingualNeural-Female",
                         label=lg_conf["sk11"],
                         visible=False,
                         interactive=True,
                     )
                     tts_voice11 = gr.Dropdown(
-                        SoniTr.tts_info.tts_list(),
+                        shared_tts_voice_list,
                         value="en-US-AndrewMultilingualNeural-Male",
                         label=lg_conf["sk12"],
                         visible=False,
@@ -2697,14 +2699,14 @@ def create_gui(theme, logs_in_gui=False):
                                 info="Insère automatiquement des balises d'émotions expressives ([laughing], [whisper], [angry], etc.) lors de la traduction pour Fish Audio."
                             )
                             default_male_voice_gui = gr.Dropdown(
-                                choices=SoniTr.tts_info.tts_list(),
+                                choices=shared_tts_voice_list,
                                 value="fr-FR-HenriNeural-Male",
                                 label="Default Male Voice (Auto-Detect)",
                                 info="Voix masculine par défaut à utiliser lors de la détection automatique.",
                                 interactive=True
                             )
                             default_female_voice_gui = gr.Dropdown(
-                                choices=SoniTr.tts_info.tts_list(),
+                                choices=shared_tts_voice_list,
                                 value="fr-FR-DeniseNeural-Female",
                                 label="Default Female Voice (Auto-Detect)",
                                 info="Voix féminine par défaut à utiliser lors de la détection automatique.",
@@ -3798,9 +3800,11 @@ if __name__ == "__main__":
     set_logging_level(args.verbosity_level)
 
     for id_model in UVR_MODELS:
-        download_manager(
-            os.path.join(MDX_DOWNLOAD_LINK, id_model), mdxnet_models_dir
-        )
+        m_path = os.path.join(mdxnet_models_dir, id_model)
+        if not os.path.exists(m_path) or os.path.getsize(m_path) == 0:
+            download_manager(
+                os.path.join(MDX_DOWNLOAD_LINK, id_model), mdxnet_models_dir
+            )
 
     models_path, index_path = upload_model_list()
 
@@ -3810,8 +3814,13 @@ if __name__ == "__main__":
     # MONKEY-PATCH : RE-DIRECTION DE LA LISTE DES VOIX DE L'INTERFACE WEB (BÉTON ARMÉ)
     # ==========================================================================
     original_tts_list_method = SoniTr.tts_info.tts_list
+    _cached_custom_tts_list = None
 
-    def patched_tts_list_method():
+    def patched_tts_list_method(force_refresh=False):
+        nonlocal _cached_custom_tts_list
+        if _cached_custom_tts_list is not None and not force_refresh:
+            return _cached_custom_tts_list
+
         import os
         
         # Scan dynamique automatique de sécurité (vérifie voice_library et soni_translate/voice_library)
@@ -3902,7 +3911,8 @@ if __name__ == "__main__":
             if x not in unique_list:
                 unique_list.append(x)
                 
-        return unique_list + original_tts_list_method()
+        _cached_custom_tts_list = unique_list + original_tts_list_method()
+        return _cached_custom_tts_list
 
     SoniTr.tts_info.tts_list = patched_tts_list_method
     # ==========================================================================
@@ -3914,9 +3924,10 @@ if __name__ == "__main__":
     app.queue()
 
     app.launch(
-        max_threads=1,
+        max_threads=40,
         share=args.public_url,
         show_error=True,
+        show_api=False,
         quiet=False,
         debug=(True if logger.isEnabledFor(logging.DEBUG) else False),
     )

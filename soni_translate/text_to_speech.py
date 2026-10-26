@@ -112,7 +112,13 @@ def pad_array(array, sr):
 # =====================================
 
 
+_CACHED_EDGE_VOICES = []
+
 def edge_tts_voices_list():
+    global _CACHED_EDGE_VOICES
+    if _CACHED_EDGE_VOICES:
+        return _CACHED_EDGE_VOICES
+
     try:
         completed_process = subprocess.run(
             ["edge-tts", "--list-voices"], capture_output=True, text=True
@@ -149,6 +155,9 @@ def edge_tts_voices_list():
 
     if not formatted_voices:
         logger.error("Can't get EDGE TTS - list voices")
+
+    if formatted_voices:
+        _CACHED_EDGE_VOICES = formatted_voices
 
     return formatted_voices
 
