@@ -2868,44 +2868,41 @@ def create_gui(theme, logs_in_gui=False):
                             value="English (en)",
                             label="Langue d'origine"
                         )
-                    btn_fastdub_transcribe = gr.Button("⚡ 1. Extraire les dialogues (Whisper)", variant="primary", size="lg")
+                    btn_fastdub_transcribe = gr.Button("⚡ 1. Extraire les dialogues (Whisper)", variant="primary")
                     fastdub_status_asr = gr.Markdown("")
 
             gr.HTML("<hr style='margin: 15px 0;'>")
 
             with gr.Row():
-                with gr.Column(scale=1):
+                with gr.Column():
                     gr.Markdown("#### 📝 Transcription brute (SRT)")
                     fastdub_srt_box = gr.Textbox(
                         label="Script original horodaté (Copie ou écriture manuelle)",
                         placeholder="1\n00:00:00,249 --> 00:00:01,171\nDamn, you look amazing.\n\n2\n00:00:01,732 --> 00:00:02,394\nWhat's your name?",
                         lines=14,
-                        max_lines=25,
-                        show_copy_button=True
+                        max_lines=25
                     )
 
-                with gr.Column(scale=1):
+                with gr.Column():
                     gr.Markdown("#### 🎭 Script de doublage adapté (Éditable)")
                     fastdub_dub_script_box = gr.Textbox(
                         label="Script français synchronisé (Speaker X: [émotion] Texte)",
                         placeholder="1\n00:00:00,249 --> 00:00:01,171\nSpeaker 1: [admiratif] Waouh, t'es magnifique.\n\n2\n00:00:01,732 --> 00:00:02,394\nSpeaker 2: [froide] Qu'est-ce que tu me veux ?",
                         lines=14,
-                        max_lines=25,
-                        show_copy_button=True
+                        max_lines=25
                     )
                     with gr.Row():
-                        btn_fastdub_adapt_gemini = gr.Button("⚡ 2. Adapter via Gemini (1-Clic API)", variant="primary", size="lg")
+                        btn_fastdub_adapt_gemini = gr.Button("⚡ 2. Adapter via Gemini (1-Clic API)", variant="primary")
                         fastdub_gemini_model = gr.Dropdown(
                             ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"],
                             value="gemini-3.5-flash-lite",
-                            label="Modèle d'adaptation",
-                            scale=1
+                            label="Modèle d'adaptation"
                         )
 
             gr.HTML("<hr style='margin: 15px 0;'>")
 
             with gr.Row():
-                with gr.Column(scale=1):
+                with gr.Column():
                     gr.Markdown("#### 🎙️ Attribution des voix & Réglages")
                     from soni_translate.fastdub import get_fastdub_voices
                     fastdub_voices_list = get_fastdub_voices()
@@ -2920,10 +2917,10 @@ def create_gui(theme, logs_in_gui=False):
                         fastdub_tts_engine = gr.Dropdown(["fish_audio", "edge_tts"], value="fish_audio", label="Moteur TTS")
                         fastdub_bg_volume = gr.Slider(minimum=0.0, maximum=0.5, value=0.15, step=0.05, label="Volume fond sonore original (Ducking)")
 
-                    btn_fastdub_render = gr.Button("🎬 3. Générer le Doublage & la Vidéo Finale 🚀", variant="primary", size="lg")
+                    btn_fastdub_render = gr.Button("🎬 3. Générer le Doublage & la Vidéo Finale 🚀", variant="primary")
                     fastdub_status_render = gr.Markdown("")
 
-                with gr.Column(scale=1):
+                with gr.Column():
                     fastdub_video_output = gr.Video(label="Vidéo finale FastDub")
 
             # Connexion des callbacks FastDub
