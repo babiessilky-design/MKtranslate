@@ -117,11 +117,128 @@ def srt_time_to_seconds(time_str):
 
 
 # ==============================================================================
-# 1. TRANSCRIPTION BRUTE VERS FORMAT SRT (WHISPER)
+# ==============================================================================
+# DÉCOUPAGE INTELLIGENT DES SEGMENTS EN PHRASES & TOURS DE PAROLE (1-3s)
+# ==============================================================================
+def split_segment_into_dialogue_sentences(seg):
+    """
+    Découpe un gros segment de transcription (ex: 14s) en répliques courtes et rythmées (1 à 3s) :
+    1. Si des mots horodatés ('words') sont disponibles via Wav2Vec2 ou Gemini :
+       Regroupe les mots en phrases en coupant sur la ponctuation ([.?!…]) et sur les silences inter-mots (>0.35s).
+    2. Si aucun mot horodaté n'est disponible (Whisper brut) :
+       Découpe le texte sur les frontières de phrases ([.?!…]) et distribue le temps proportionnellement
+       à la longueur des phrases.
+    """
+    raw_text = str(seg.get("text", "")).strip()
+    if not raw_text:
+        return []
+
+    words = seg.get("words", [])
+    speaker = seg.get("speaker", "SPEAKER_00")
+    seg_start = float(seg.get("start", 0.0))
+    seg_end = float(seg.get("end", 0.0))
+    seg_dur = max(0.1, seg_end - seg_start)
+
+    # 1. CAS AVEC MOTS HORODATÉS (Wav2Vec2 ou Gemini ASR)
+    valid_words = [
+        w for w in words 
+        if isinstance(w, dict) and (w.get("word") or w.get("text")) and "start" in w and "end" in w
+    ]
+    if valid_words and len(valid_words) >= 2:
+        sub_segs = []
+        cur_words = []
+        for i, w in enumerate(valid_words):
+            w_text = str(w.get("word") or w.get("text") or "").strip()
+            if not w_text:
+                continue
+            cur_words.append(w)
+            
+            ends_sentence = w_text[-1:] in ['.', '!', '?', '…']
+            pause_after = False
+            if i + 1 < len(valid_words):
+                next_w = valid_words[i + 1]
+                try:
+                    if float(next_w.get("start", 0)) - float(w.get("end", 0)) >= 0.35:
+                        pause_after = True
+                except (ValueError, TypeError):
+                    pass
+
+            if (ends_sentence or pause_after) and len(cur_words) >= 1:
+                w_str = " ".join(str(cw.get("word") or cw.get("text") or "").strip() for cw in cur_words)
+                s_start = float(cur_words[0]["start"])
+                s_end = float(cur_words[-1]["end"])
+                if s_end <= s_start:
+                    s_end = s_start + 0.4
+                sub_segs.append({
+                    "start": round(s_start, 3),
+                    "end": round(s_end, 3),
+                    "text": w_str,
+                    "speaker": speaker,
+                    "words": cur_words
+                })
+                cur_words = []
+
+        if cur_words:
+            w_str = " ".join(str(cw.get("word") or cw.get("text") or "").strip() for cw in cur_words)
+            s_start = float(cur_words[0]["start"])
+            s_end = float(cur_words[-1]["end"])
+            if s_end <= s_start:
+                s_end = s_start + 0.4
+            sub_segs.append({
+                "start": round(s_start, 3),
+                "end": round(s_end, 3),
+                "text": w_str,
+                "speaker": speaker,
+                "words": cur_words
+            })
+
+        if sub_segs:
+            return sub_segs
+
+    # 2. CAS TEXTE BRUT : DÉCOUPAGE RÉGEX ET INTERPOLATION TEMPORELLE
+    sentences = [s.strip() for s in re.split(r'(?<=[.!?…])\s+', raw_text) if s.strip()]
+    if len(sentences) <= 1:
+        return [seg]
+
+    # Regrouper les micro-fragments accidentels (< 2 caractères) avec la phrase précédente
+    merged_sentences = []
+    for s in sentences:
+        if merged_sentences and len(s) <= 2 and not s[-1:] in ['.', '!', '?']:
+            merged_sentences[-1] += " " + s
+        else:
+            merged_sentences.append(s)
+
+    if len(merged_sentences) <= 1:
+        return [seg]
+
+    total_weight = sum(max(len(s.split()), 1) for s in merged_sentences)
+    sub_segs = []
+    cur_start = seg_start
+
+    for s in merged_sentences:
+        weight = max(len(s.split()), 1)
+        dur = (weight / total_weight) * seg_dur
+        s_end = min(seg_end, cur_start + dur)
+        if s_end <= cur_start:
+            s_end = cur_start + 0.4
+        sub_segs.append({
+            "start": round(cur_start, 3),
+            "end": round(s_end, 3),
+            "text": s,
+            "speaker": speaker
+        })
+        cur_start = s_end
+
+    return sub_segs
+
+
+# ==============================================================================
+# 1. TRANSCRIPTION BRUTE VERS FORMAT SRT (WHISPER / GEMINI)
 # ==============================================================================
 def transcribe_media_to_srt(media_path, asr_model="large-v3", source_lang="en", compute_type="float16"):
     """
-    Extrait l'audio d'une vidéo/audio et génère la transcription brute au format SRT.
+    Extrait l'audio d'une vidéo/audio et génère la transcription brute au format SRT,
+    scindée intelligemment phrase par phrase (1 à 3 secondes).
     """
     if not media_path or not os.path.exists(media_path):
         raise FileNotFoundError(f"Fichier média introuvable : {media_path}")
@@ -163,7 +280,7 @@ def transcribe_media_to_srt(media_path, asr_model="large-v3", source_lang="en", 
     logger.info(f"FastDub ASR : Lancement de la transcription ({asr_selected}, {compute_type})...")
     from soni_translate.speech_segmentation import transcribe_speech
     
-    _, result = transcribe_speech(
+    audio, result = transcribe_speech(
         audio_wav=temp_wav,
         asr_model=asr_selected,
         compute_type=compute_type,
@@ -173,17 +290,42 @@ def transcribe_media_to_srt(media_path, asr_model="large-v3", source_lang="en", 
         segment_duration_limit=15
     )
 
-    segments = result.get("segments", [])
-    if not segments:
+    # Tentative d'alignement phonétique Wav2Vec2 pour obtenir les mots horodatés
+    if asr_selected != "Gemini 3.5 Transcribe":
+        try:
+            from soni_translate.speech_segmentation import align_speech
+            logger.info("FastDub ASR : Lancement de l'alignement phonétique Wav2Vec2...")
+            aligned_result = align_speech(audio, result)
+            if aligned_result and aligned_result.get("segments"):
+                result = aligned_result
+                logger.info(f"FastDub ASR : Alignement Wav2Vec2 réussi ({len(result.get('segments', []))} segments).")
+        except Exception as e_align:
+            logger.warning(f"FastDub ASR : Alignement Wav2Vec2 non disponible ({e_align}), utilisation du découpage intelligent de phrases.")
+
+    raw_segments = result.get("segments", [])
+    if not raw_segments:
         shutil.rmtree(temp_dir, ignore_errors=True)
         return ""
 
+    # Découpage intelligent de tous les segments géants en répliques naturelles courtes
+    fine_segments = []
+    for seg in raw_segments:
+        sub_segs = split_segment_into_dialogue_sentences(seg)
+        fine_segments.extend(sub_segs)
+
+    # Détection si plusieurs locuteurs sont étiquetés (ex: Gemini ou Diarization)
+    speakers_in_result = set(s.get("speaker") for s in fine_segments if s.get("speaker"))
+    has_multiple_speakers = len(speakers_in_result) > 1
+
     # Construction du texte SRT
     srt_lines = []
-    for idx, seg in enumerate(segments, 1):
+    for idx, seg in enumerate(fine_segments, 1):
         start_str = seconds_to_srt_time(float(seg["start"]))
         end_str = seconds_to_srt_time(float(seg["end"]))
         text = str(seg.get("text", "")).strip()
+        spk = seg.get("speaker")
+        if has_multiple_speakers and spk:
+            text = f"{spk}: {text}"
         srt_lines.append(f"{idx}\n{start_str} --> {end_str}\n{text}\n")
 
     shutil.rmtree(temp_dir, ignore_errors=True)
