@@ -2843,6 +2843,155 @@ def create_gui(theme, logs_in_gui=False):
                             cache_examples=False,
                         )
 
+        # ==============================================================================
+        # ⚡ ONGLET FASTDUB (STUDIO DE DOUBLAGE RYTHMIQUE FLASH)
+        # ==============================================================================
+        with gr.Tab("⚡ FastDub"):
+            gr.Markdown(
+                """
+                ### ⚡ FastDub — Studio de Doublage Flash & Rythmique
+                *Doublez vos vidéos YouTube, pranks et dialogues en 3 étapes ultra-rapides, avec synchronisation parfaite et gestion expressive des émotions.*
+                """
+            )
+            with gr.Row():
+                with gr.Column(scale=1):
+                    fastdub_video_input = gr.Video(label="1. Fichier Vidéo Source")
+                with gr.Column(scale=1):
+                    with gr.Row():
+                        fastdub_asr_model = gr.Dropdown(
+                            ["whisper_large_v3", "Gemini 3.5 Transcribe"],
+                            value="whisper_large_v3",
+                            label="Moteur de transcription"
+                        )
+                        fastdub_src_lang = gr.Dropdown(
+                            ["English (en)", "French (fr)", "Spanish (es)", "Auto"],
+                            value="English (en)",
+                            label="Langue d'origine"
+                        )
+                    btn_fastdub_transcribe = gr.Button("⚡ 1. Extraire les dialogues (Whisper)", variant="primary", size="lg")
+                    fastdub_status_asr = gr.Markdown("")
+
+            gr.HTML("<hr style='margin: 15px 0;'>")
+
+            with gr.Row():
+                with gr.Column(scale=1):
+                    gr.Markdown("#### 📝 Transcription brute (SRT)")
+                    fastdub_srt_box = gr.Textbox(
+                        label="Script original horodaté (Copie ou écriture manuelle)",
+                        placeholder="1\n00:00:00,249 --> 00:00:01,171\nDamn, you look amazing.\n\n2\n00:00:01,732 --> 00:00:02,394\nWhat's your name?",
+                        lines=14,
+                        max_lines=25,
+                        show_copy_button=True
+                    )
+
+                with gr.Column(scale=1):
+                    gr.Markdown("#### 🎭 Script de doublage adapté (Éditable)")
+                    fastdub_dub_script_box = gr.Textbox(
+                        label="Script français synchronisé (Speaker X: [émotion] Texte)",
+                        placeholder="1\n00:00:00,249 --> 00:00:01,171\nSpeaker 1: [admiratif] Waouh, t'es magnifique.\n\n2\n00:00:01,732 --> 00:00:02,394\nSpeaker 2: [froide] Qu'est-ce que tu me veux ?",
+                        lines=14,
+                        max_lines=25,
+                        show_copy_button=True
+                    )
+                    with gr.Row():
+                        btn_fastdub_adapt_gemini = gr.Button("⚡ 2. Adapter via Gemini (1-Clic API)", variant="primary", size="lg")
+                        fastdub_gemini_model = gr.Dropdown(
+                            ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"],
+                            value="gemini-3.5-flash-lite",
+                            label="Modèle d'adaptation",
+                            scale=1
+                        )
+
+            gr.HTML("<hr style='margin: 15px 0;'>")
+
+            with gr.Row():
+                with gr.Column(scale=1):
+                    gr.Markdown("#### 🎙️ Attribution des voix & Réglages")
+                    from soni_translate.fastdub import get_fastdub_voices
+                    fastdub_voices_list = get_fastdub_voices()
+                    default_v1 = "ref_homme_fr" if "ref_homme_fr" in fastdub_voices_list else fastdub_voices_list[0]
+                    default_v2 = "ref_femme_fr" if "ref_femme_fr" in fastdub_voices_list else (fastdub_voices_list[1] if len(fastdub_voices_list) > 1 else fastdub_voices_list[0])
+
+                    with gr.Row():
+                        fastdub_spk1_voice = gr.Dropdown(fastdub_voices_list, value=default_v1, label="Speaker 1 (Homme)")
+                        fastdub_spk2_voice = gr.Dropdown(fastdub_voices_list, value=default_v2, label="Speaker 2 (Femme)")
+                    
+                    with gr.Row():
+                        fastdub_tts_engine = gr.Dropdown(["fish_audio", "edge_tts"], value="fish_audio", label="Moteur TTS")
+                        fastdub_bg_volume = gr.Slider(minimum=0.0, maximum=0.5, value=0.15, step=0.05, label="Volume fond sonore original (Ducking)")
+
+                    btn_fastdub_render = gr.Button("🎬 3. Générer le Doublage & la Vidéo Finale 🚀", variant="primary", size="lg")
+                    fastdub_status_render = gr.Markdown("")
+
+                with gr.Column(scale=1):
+                    fastdub_video_output = gr.Video(label="Vidéo finale FastDub")
+
+            # Connexion des callbacks FastDub
+            def run_fastdub_transcribe(video_path, asr_model, src_lang, progress=gr.Progress()):
+                if not video_path:
+                    raise gr.Error("Veuillez d'abord fournir une vidéo ou un fichier audio.")
+                vpath = video_path if isinstance(video_path, str) else getattr(video_path, "name", str(video_path))
+                from soni_translate.fastdub import transcribe_media_to_srt
+                clean_lang = "en"
+                if "fr" in str(src_lang).lower(): clean_lang = "fr"
+                elif "es" in str(src_lang).lower(): clean_lang = "es"
+                elif "auto" in str(src_lang).lower(): clean_lang = "auto"
+                
+                progress(0.1, desc="Extraction audio et transcription Whisper...")
+                srt_res = transcribe_media_to_srt(vpath, asr_model=asr_model, source_lang=clean_lang)
+                return srt_res, "✅ **Transcription terminée avec succès !** Vous pouvez adapter le script à droite."
+
+            def run_fastdub_adapt(srt_text, model_name, progress=gr.Progress()):
+                if not srt_text or not srt_text.strip():
+                    raise gr.Error("Le script SRT est vide. Veuillez transcrire une vidéo ou coller un script SRT.")
+                from soni_translate.fastdub import adapt_script_gemini
+                progress(0.2, desc="Adaptation Gemini en cours...")
+                adapted = adapt_script_gemini(srt_text, model_name=model_name)
+                return adapted
+
+            def run_fastdub_render(video_path, script_text, spk1_voice, spk2_voice, tts_engine, bg_vol, progress=gr.Progress()):
+                if not video_path:
+                    raise gr.Error("Fichier vidéo source manquant.")
+                if not script_text or not script_text.strip():
+                    raise gr.Error("Le script de doublage est vide.")
+                vpath = video_path if isinstance(video_path, str) else getattr(video_path, "name", str(video_path))
+                from soni_translate.fastdub import render_fastdub_video
+                out_vid = render_fastdub_video(
+                    media_path=vpath,
+                    script_text=script_text,
+                    speaker1_voice=spk1_voice,
+                    speaker2_voice=spk2_voice,
+                    tts_engine=tts_engine,
+                    background_volume=float(bg_vol),
+                    progress=progress
+                )
+                return out_vid, "🎉 **Doublage FastDub terminé avec succès !**"
+
+            btn_fastdub_transcribe.click(
+                fn=run_fastdub_transcribe,
+                inputs=[fastdub_video_input, fastdub_asr_model, fastdub_src_lang],
+                outputs=[fastdub_srt_box, fastdub_status_asr]
+            )
+
+            btn_fastdub_adapt_gemini.click(
+                fn=run_fastdub_adapt,
+                inputs=[fastdub_srt_box, fastdub_gemini_model],
+                outputs=[fastdub_dub_script_box]
+            )
+
+            btn_fastdub_render.click(
+                fn=run_fastdub_render,
+                inputs=[
+                    fastdub_video_input,
+                    fastdub_dub_script_box,
+                    fastdub_spk1_voice,
+                    fastdub_spk2_voice,
+                    fastdub_tts_engine,
+                    fastdub_bg_volume
+                ],
+                outputs=[fastdub_video_output, fastdub_status_render]
+            )
+
         with gr.Tab(lg_conf["tab_docs"]):
             with gr.Column():
                 with gr.Accordion("Docs", open=True):
