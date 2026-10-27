@@ -352,15 +352,22 @@ Ta mission : transformer la transcription anglaise horodatée en un script de do
 
 **ANALYSE ET COMPRÉHENSION NARRATIVE (GOLD DIGGER PRANK) :**
 Dans ces vidéos, l'histoire suit un schéma psychologique précis :
-1. **Speaker 1 (L'Homme / Le Piégeur)** :
+1. **Speaker 1 (L'Homme / Le Piégeur / Le Créateur)** :
    - C'est lui qui aborde la fille dans la rue (démarche décontractée, charmeur ou taquin).
    - C'est lui qui possède la voiture de luxe / supercar (Lamborghini, Ferrari, BMW...).
    - **RÈGLE CRUCIALE DES APARTÉS :** Quand quelqu'un parle seul en voix basse face caméra ("Another failed attempt", "She's walking back", "Whole energy change", etc.), c'est OBLIGATOIREMENT Speaker 1 qui commente la scène ! Balise [whisper] ou [amuse].
 2. **Speaker 2 (La Fille abordée)** :
    - *Cas fréquent (Gold Digger)* : Au début, elle est froide, réticente, distante ou expéditive ("I'm busy", "I have a boyfriend", "My name's not here"). Dès qu'elle voit la voiture ou le signe de richesse, son énergie bascule radicalement : elle devient curieuse, mielleuse, charmeuse, flatteuse ("Is this your car?", "You must got money", "Can I get a ride?").
    - *Cas des filles sympas* : Certaines filles restent naturelles, polies ou souriantes dès le début. Ne force pas l'agressivité si elle est douce.
-3. **Cohérence absolue des rôles :**
-   Ne confonds JAMAIS Speaker 1 (le mec piégeur) et Speaker 2 (la fille) au cours de la vidéo.
+3. **VIDÉOS MULTIPLES / COMPILATIONS & PHASES DE TRANSITION (CTA / CONSEILS) :**
+   - La vidéo peut compiler 2 ou plusieurs pranks à la suite.
+   - Entre deux pranks ou au milieu/fin de la vidéo, il y a souvent une **phase transitoire ou d'interaction avec le public** :
+     * Appels à l'action : *"Drop a like, subscribe guys"*, *"Lâchez un pouce bleu, abonnez-vous les gars !"*, *"Let's go to the next one!"*, *"C'est parti pour la suivante !"*.
+     * Conseils aux viewers ou débriefing : *"Ne vous faites jamais avoir par les michtos"*, *"Dites-moi ce que vous en pensez en commentaire"*.
+   - **RÈGLE FORMELLE :** Tout appel à s'abonner/liker, conseil face caméra ou phrase de transition vers la suite est **OBLIGATOIREMENT attribué à Speaker 1 (Le Créateur)**, généralement avec la balise `[excited]`, `[amuse]` ou `[calme]`. Ce n'est JAMAIS la fille !
+   - Après cette transition, un nouveau prank démarre : Speaker 1 reste le créateur, mais Speaker 2 devient une **nouvelle fille** (la dynamique d'approche recommence donc à zéro).
+4. **Cohérence absolue des rôles :**
+   Ne confonds JAMAIS Speaker 1 (le créateur) et Speaker 2 (la fille) au cours de la vidéo.
 
 **RÈGLES D'OR DU DOUBLAGE RYTHMIQUE (LABIALE & TEMPO) :**
 1. **CONTRAINTE DE DURÉE (VÉLOCITÉ MAXIMALE) :**
