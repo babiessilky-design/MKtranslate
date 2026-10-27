@@ -27,6 +27,14 @@ FISH_EMOTIONS_MAP = {
     "posé": "calm",
     "neutre": "calm",
     "confiant": "calm",
+    "froide": "calm",
+    "distante": "calm",
+    "méprisante": "calm",
+    "hautaine": "calm",
+    "hésitante": "calm",
+    "gênée": "calm",
+    "intéressée": "excited",
+    "mielleuse": "excited",
     "surpris": "surprised",
     "étonné": "surprised",
     "choqué": "surprised",
@@ -35,6 +43,9 @@ FISH_EMOTIONS_MAP = {
     "riant": "laughing",
     "moqueur": "laughing",
     "rigole": "laughing",
+    "taquin": "laughing",
+    "ironique": "laughing",
+    "sarcastique": "laughing",
     "agacé": "angry",
     "énervé": "angry",
     "colère": "angry",
@@ -335,24 +346,47 @@ def transcribe_media_to_srt(media_path, asr_model="large-v3", source_lang="en", 
 # ==============================================================================
 # 2. ADAPTATION VIA MASTER PROMPT GEMINI (1 SEUL APPEL API)
 # ==============================================================================
-FAST_DUB_MASTER_PROMPT = """**RÔLE :**
-Tu es un Expert en Adaptation et Doublage Rythmique Multimodal. Ta mission est de transformer une conversation anglaise avec horodatages en un script de doublage français prêt pour le TTS, parfaitement synchronisé avec la durée originale.
+FAST_DUB_MASTER_PROMPT = """**RÔLE ET MISSION :**
+Tu es l'Adaptateur en Chef et Directeur Artistique de doublage français pour des vidéos virales de type **"Gold Digger Prank"**, caméras cachées et micro-trottoirs de drague (USA).
+Ta mission : transformer la transcription anglaise horodatée en un script de doublage français oral, ultra-naturel, percutant et parfaitement synchronisé avec les durées d'origine pour la synthèse vocale TTS.
 
-**ANALYSE ET RÈGLES D'ADAPTATION :**
-1. Analyse l'ensemble des répliques pour identifier les locuteurs : Speaker 1 est l'homme (voix grave, dragueur ou taquin), Speaker 2 est la femme (voix aiguë, réticente puis surprise).
-2. Capte l'émotion réelle et le débit de parole (lent ou rapide) de chaque réplique.
-3. Ne saute aucune ligne, adapte ligne par ligne en prenant compte du contexte global.
-4. Raccourcis et adapte le texte français pour qu'il tienne pile dans la durée exacte entre le début et la fin de la réplique (doublage rythmique punchy, style parlé naturel).
-5. FORMATAGE DU SCRIPT (IMPÉRATIF) :
-Conserve strictement la numérotation et les horodatages originaux.
-Chaque réplique doit respecter strictement ce format :
+**ANALYSE ET COMPRÉHENSION NARRATIVE (GOLD DIGGER PRANK) :**
+Dans ces vidéos, l'histoire suit un schéma psychologique précis :
+1. **Speaker 1 (L'Homme / Le Piégeur)** :
+   - C'est lui qui aborde la fille dans la rue (démarche décontractée, charmeur ou taquin).
+   - C'est lui qui possède la voiture de luxe / supercar (Lamborghini, Ferrari, BMW...).
+   - **RÈGLE CRUCIALE DES APARTÉS :** Quand quelqu'un parle seul en voix basse face caméra ("Another failed attempt", "She's walking back", "Whole energy change", etc.), c'est OBLIGATOIREMENT Speaker 1 qui commente la scène ! Balise [whisper] ou [amuse].
+2. **Speaker 2 (La Fille abordée)** :
+   - *Cas fréquent (Gold Digger)* : Au début, elle est froide, réticente, distante ou expéditive ("I'm busy", "I have a boyfriend", "My name's not here"). Dès qu'elle voit la voiture ou le signe de richesse, son énergie bascule radicalement : elle devient curieuse, mielleuse, charmeuse, flatteuse ("Is this your car?", "You must got money", "Can I get a ride?").
+   - *Cas des filles sympas* : Certaines filles restent naturelles, polies ou souriantes dès le début. Ne force pas l'agressivité si elle est douce.
+3. **Cohérence absolue des rôles :**
+   Ne confonds JAMAIS Speaker 1 (le mec piégeur) et Speaker 2 (la fille) au cours de la vidéo.
+
+**RÈGLES D'OR DU DOUBLAGE RYTHMIQUE (LABIALE & TEMPO) :**
+1. **CONTRAINTE DE DURÉE (VÉLOCITÉ MAXIMALE) :**
+   Le français est naturellement 20% plus long que l'anglais. Tu dois CONDENSER et PUNCHER les répliques pour qu'elles rentrent pile dans le chronométrage sans que le TTS ait besoin d'accélérer :
+   - Réplique courte (< 1.5 seconde) : Maximum 3 à 5 mots percutants.
+   - Réplique moyenne (2.0 à 3.5 secondes) : Maximum 6 à 9 mots.
+   - Réplique longue (> 4.0 secondes) : Maximum 12 à 15 mots bien rythmés.
+2. **STYLE STREET / PARLÉ VIVANT (EXIT LE FRANÇAIS SCOLAIRE) :**
+   - Tutoiement direct et immédiat.
+   - Élimine les "ne" de négation : "J'sais pas", "T'as pas vu", "C'est mort", "Laisse tomber".
+   - Vocabulaire naturel et percutant : "Caisse" / "Bagnole" au lieu de "Voiture", "Fric" / "Cash" / "Oseille" au lieu de "Argent", "Râteau" au lieu de "Rejet".
+   - Ponctuation orale : utilise des virgules et des points de suspension pour donner du souffle et du rythme au TTS.
+
+**BALISES D'ÉMOTIONS (NATIVES POUR LE TTS) :**
+Place obligatoirement une balise entre crochets au début de chaque réplique :
+- Pour le mec : [charmeur], [amuse], [calme], [whisper], [moqueur], [taquin], [ironique]
+- Pour la fille : [froide], [distante], [surpris], [curieux], [charmeur], [mielleuse], [amuse], [agace], [choque]
+- Balises audio directes supportées : [excited], [laughing], [whisper], [angry], [surprised], [sad], [calm]
+
+**FORMAT STRICT DE SORTIE :**
+Conserve strictement la numérotation et les horodatages originaux de chaque segment.
 Numéro
 HH:MM:SS,mmm --> HH:MM:SS,mmm
-Speaker X: [émotion] Texte court et adapté
+Speaker X: [émotion] Texte français adapté
 
-(Note : Ne mets JAMAIS de crochets autour de 'Speaker X'. Mets l'émotion entre crochets juste avant le texte.
-Exemples de balises d'émotions : [admiratif], [charmeur], [curieux], [surpris], [froide], [amusé], [agacé], [calme], [laughing], [whisper], [angry], [excited]).
-Ne renvoie AUCUN commentaire, note ou balise markdown (pas de ```), commence directement par le numéro 1."""
+(Ne mets JAMAIS de crochets autour de 'Speaker X'. Ne renvoie AUCUN commentaire, explication ou balise markdown ```. Commence directement par le numéro 1)."""
 
 def adapt_script_gemini(srt_text, custom_prompt=None, model_name="gemini-3.5-flash-lite"):
     """
@@ -467,44 +501,64 @@ def parse_dubbing_script(script_text):
             end_sec = start_sec + 1.0
 
         # Le texte de la réplique se trouve après la ligne de temps
-        text_lines = lines[time_line_idx + 1:]
+        text_lines = [l.strip() for l in lines[time_line_idx + 1:] if l.strip()]
         if not text_lines:
             continue
-        content = " ".join(text_lines).strip()
 
-        # Analyse du locuteur et de l'émotion
-        speaker_id = 1
-        emotion_tag = "[calm]"
-        speech_text = content
+        cues = []
+        for tl in text_lines:
+            if speaker_pattern.match(tl):
+                cues.append(tl)
+            elif cues:
+                cues[-1] += " " + tl
+            else:
+                cues.append(tl)
 
-        spk_match = speaker_pattern.match(content)
-        if spk_match:
-            # Récupération du numéro de locuteur
-            if spk_match.group(1):
-                speaker_id = int(spk_match.group(1))
-            elif spk_match.group(2):
-                speaker_id = 2 if "femme" in spk_match.group(2).lower() else 1
-            elif spk_match.group(3):
-                speaker_id = int(spk_match.group(3)) + 1
-            
-            speech_text = spk_match.group(4).strip()
+        total_cue_weight = sum(max(len(c.split()), 1) for c in cues)
+        cue_start = start_sec
+        block_dur = max(end_sec - start_sec, 0.4)
 
-        # Analyse de l'émotion entre crochets
-        emo_match = emotion_pattern.match(speech_text)
-        if emo_match:
-            raw_emo = emo_match.group(1)
-            emotion_tag = normalize_emotion_for_fish(raw_emo)
-            speech_text = emo_match.group(2).strip()
+        for c_text in cues:
+            weight = max(len(c_text.split()), 1)
+            dur = (weight / max(total_cue_weight, 1)) * block_dur
+            cue_end = min(end_sec, cue_start + dur)
+            if cue_end <= cue_start:
+                cue_end = cue_start + 0.4
 
-        parsed_dialogues.append({
-            "start": start_sec,
-            "end": end_sec,
-            "duration": end_sec - start_sec,
-            "speaker": speaker_id,
-            "emotion": emotion_tag,
-            "text": speech_text,
-            "full_tts_text": f"{emotion_tag} {speech_text}".strip()
-        })
+            speaker_id = 1
+            emotion_tag = "[calm]"
+            speech_text = c_text
+
+            spk_match = speaker_pattern.match(c_text)
+            if spk_match:
+                if spk_match.group(1):
+                    speaker_id = int(spk_match.group(1))
+                elif spk_match.group(2):
+                    speaker_id = 2 if "femme" in spk_match.group(2).lower() else 1
+                elif spk_match.group(3):
+                    speaker_id = int(spk_match.group(3)) + 1
+                speech_text = spk_match.group(4).strip()
+
+            emo_match = emotion_pattern.match(speech_text)
+            if emo_match:
+                raw_emo = emo_match.group(1)
+                emotion_tag = normalize_emotion_for_fish(raw_emo)
+                speech_text = emo_match.group(2).strip()
+
+            # Nettoyage ultime du texte pour le TTS
+            speech_text = re.sub(r'^(?:Speaker\s*\d+|Homme|Femme)\s*:\s*', '', speech_text, flags=re.IGNORECASE).strip()
+
+            parsed_dialogues.append({
+                "start": round(cue_start, 3),
+                "end": round(cue_end, 3),
+                "duration": round(cue_end - cue_start, 3),
+                "speaker": speaker_id,
+                "emotion": emotion_tag,
+                "text": speech_text,
+                "full_tts_text": f"{emotion_tag} {speech_text}".strip()
+            })
+            cue_start = cue_end
+
 
     return parsed_dialogues
 
