@@ -128,17 +128,33 @@ def srt_time_to_seconds(time_str):
 
 
 # ==============================================================================
+# DÉCOUPAGE INTELLIGENT DES SEGMENTS EN PHRASES & TOURS DE PAROLE (1-4s)
 # ==============================================================================
-# DÉCOUPAGE INTELLIGENT DES SEGMENTS EN PHRASES & TOURS DE PAROLE (1-3s)
-# ==============================================================================
+DANGLING_WORDS = {
+    'you', 'i', 'he', 'she', 'we', 'they', 'it', 'my', 'your', 'his', 'her', 'our', 'their',
+    'a', 'an', 'the', 'and', 'or', 'but', 'so', 'if', 'because', 'why', 'what', 'who', 'how',
+    'when', 'where', 'to', 'in', 'on', 'at', 'for', 'with', 'by', 'about', 'tu', 'je', 'il',
+    'elle', 'on', 'nous', 'vous', 'ils', 'elles', 'mon', 'ton', 'son', 'ma', 'ta', 'sa',
+    'mes', 'tes', 'ses', 'le', 'la', 'les', 'un', 'une', 'des', 'et', 'ou', 'mais', 'donc',
+    'car', 'que', 'qui', 'ce', 'cet', 'cette', 'ces'
+}
+
+ABBREVIATIONS = {
+    'mr.', 'mrs.', 'ms.', 'dr.', 'prof.', 'st.', 'vs.', 'u.s.', 'etc.', 'approx.', 'jr.', 'sr.'
+}
+
+STANDALONE_WORDS = {
+    'yes', 'no', 'yeah', 'yep', 'nope', 'oui', 'non', 'ouais', 'cool', 'exactement',
+    'merci', 'thanks', 'sure', 'ok', 'okay', 'bye', 'hello', 'salut', 'wow', 'yo', 'right'
+}
+
 def split_segment_into_dialogue_sentences(seg):
     """
-    Découpe un gros segment de transcription (ex: 14s) en répliques courtes et rythmées (1 à 3s) :
+    Découpe un gros segment de transcription (ex: 14s) en répliques naturelles et rythmées (1 à 4s) :
     1. Si des mots horodatés ('words') sont disponibles via Wav2Vec2 ou Gemini :
-       Regroupe les mots en phrases en coupant sur la ponctuation ([.?!…]) et sur les silences inter-mots (>0.35s).
+       Regroupe les mots en phrases grammaticales complètes sans jamais découper les sujets/pronoms orphelins.
     2. Si aucun mot horodaté n'est disponible (Whisper brut) :
-       Découpe le texte sur les frontières de phrases ([.?!…]) et distribue le temps proportionnellement
-       à la longueur des phrases.
+       Découpe le texte sur les frontières de phrases ([.?!…]) et distribue le temps proportionnellement.
     """
     raw_text = str(seg.get("text", "")).strip()
     if not raw_text:
@@ -164,17 +180,39 @@ def split_segment_into_dialogue_sentences(seg):
                 continue
             cur_words.append(w)
             
-            ends_sentence = w_text[-1:] in ['.', '!', '?', '…']
-            pause_after = False
+            clean_word = re.sub(r'^[^\w]+|[^\w]+$', '', w_text).lower()
+            ends_sentence = w_text[-1:] in ['.', '!', '?', '…'] and w_text.lower() not in ABBREVIATIONS
+            
+            pause_after = 0.0
             if i + 1 < len(valid_words):
                 next_w = valid_words[i + 1]
                 try:
-                    if float(next_w.get("start", 0)) - float(w.get("end", 0)) >= 0.35:
-                        pause_after = True
+                    pause_after = max(0.0, float(next_w.get("start", 0)) - float(w.get("end", 0)))
                 except (ValueError, TypeError):
                     pass
 
-            if (ends_sentence or pause_after) and len(cur_words) >= 1:
+            cur_start = float(cur_words[0]["start"])
+            cur_end = float(cur_words[-1]["end"])
+            cur_dur = max(0.0, cur_end - cur_start)
+            cur_count = len(cur_words)
+
+            should_split = False
+            # 1. Ponctuation forte de fin de phrase
+            if ends_sentence:
+                if clean_word in STANDALONE_WORDS or cur_count >= 2 or cur_dur >= 0.8:
+                    should_split = True
+            # 2. Vrai silence conversationnel (>= 0.85s) avec phrase consistante
+            elif pause_after >= 0.85:
+                if clean_word not in DANGLING_WORDS and (cur_count >= 3 or cur_dur >= 1.0):
+                    should_split = True
+            # 3. Sécurité longueur excessive (>= 4.5s) pour éviter l'emballement TTS
+            elif cur_dur >= 4.5:
+                if (w_text[-1:] == ',' or pause_after >= 0.4) and cur_count >= 4 and clean_word not in DANGLING_WORDS:
+                    should_split = True
+                elif cur_dur >= 6.0 and clean_word not in DANGLING_WORDS:
+                    should_split = True
+
+            if should_split:
                 w_str = " ".join(str(cw.get("word") or cw.get("text") or "").strip() for cw in cur_words)
                 s_start = float(cur_words[0]["start"])
                 s_end = float(cur_words[-1]["end"])
@@ -195,13 +233,21 @@ def split_segment_into_dialogue_sentences(seg):
             s_end = float(cur_words[-1]["end"])
             if s_end <= s_start:
                 s_end = s_start + 0.4
-            sub_segs.append({
-                "start": round(s_start, 3),
-                "end": round(s_end, 3),
-                "text": w_str,
-                "speaker": speaker,
-                "words": cur_words
-            })
+            
+            # Si le reliquat est un mot isolé ou trop court, le rattacher au segment précédent
+            if sub_segs and (len(cur_words) == 1 or (s_end - s_start) < 0.6):
+                sub_segs[-1]["end"] = round(s_end, 3)
+                sub_segs[-1]["text"] = sub_segs[-1]["text"] + " " + w_str
+                if "words" in sub_segs[-1]:
+                    sub_segs[-1]["words"].extend(cur_words)
+            else:
+                sub_segs.append({
+                    "start": round(s_start, 3),
+                    "end": round(s_end, 3),
+                    "text": w_str,
+                    "speaker": speaker,
+                    "words": cur_words
+                })
 
         if sub_segs:
             return sub_segs
@@ -211,10 +257,10 @@ def split_segment_into_dialogue_sentences(seg):
     if len(sentences) <= 1:
         return [seg]
 
-    # Regrouper les micro-fragments accidentels (< 2 caractères) avec la phrase précédente
+    # Regrouper les micro-fragments accidentels avec la phrase voisine
     merged_sentences = []
     for s in sentences:
-        if merged_sentences and len(s) <= 2 and not s[-1:] in ['.', '!', '?']:
+        if merged_sentences and (len(s.split()) <= 2 or len(s) <= 4) and s[-1:] not in ['.', '!', '?']:
             merged_sentences[-1] += " " + s
         else:
             merged_sentences.append(s)
@@ -241,6 +287,64 @@ def split_segment_into_dialogue_sentences(seg):
         cur_start = s_end
 
     return sub_segs
+
+
+def clean_and_merge_dialogue_segments(segments, max_dur=4.5, max_gap=0.6):
+    """
+    Passe de fusion globale : regroupe les micro-fragments orphelins (< 3 mots ou durée < 0.8s)
+    avec leurs répliques voisines pour assurer des dialogues fluides et stables.
+    """
+    if not segments or len(segments) <= 1:
+        return segments
+
+    merged = []
+    i = 0
+    while i < len(segments):
+        cur = dict(segments[i])
+        
+        while i + 1 < len(segments):
+            nxt = segments[i + 1]
+            gap = float(nxt["start"]) - float(cur["end"])
+            comb_dur = float(nxt["end"]) - float(cur["start"])
+            
+            cur_text = cur.get("text", "").strip()
+            nxt_text = nxt.get("text", "").strip()
+            cur_words = cur_text.split()
+            nxt_words = nxt_text.split()
+            
+            clean_last = re.sub(r'^[^\w]+|[^\w]+$', '', cur_words[-1] if cur_words else '').lower()
+            ends_punct = cur_text[-1:] in ['.', '!', '?', '…']
+            
+            should_merge = False
+            # Cas 1 : Mot pendant ou phrase inachevée (sans ponctuation, ou mot orphelin)
+            if not ends_punct or clean_last in DANGLING_WORDS:
+                if gap <= 1.0 and comb_dur <= max_dur:
+                    should_merge = True
+            # Cas 2 : Micro-fragment absolu (< 3 mots ou < 0.7s) avec silence court
+            elif (len(cur_words) < 3 or (float(cur["end"]) - float(cur["start"])) < 0.7) and gap <= 0.4:
+                if comb_dur <= max_dur:
+                    should_merge = True
+            # Cas 3 : Le suivant est un micro-fragment
+            elif (len(nxt_words) < 3 or (float(nxt["end"]) - float(nxt["start"])) < 0.7) and gap <= 0.4:
+                if comb_dur <= max_dur:
+                    should_merge = True
+            # Cas 4 : Deux phrases très courtes enchaînées rapidement par la même personne (gap < 0.25s)
+            elif gap <= 0.25 and (len(cur_words) + len(nxt_words)) <= 10 and comb_dur <= 3.8:
+                should_merge = True
+
+            if should_merge:
+                cur["end"] = nxt["end"]
+                cur["text"] = f"{cur_text} {nxt_text}".strip()
+                if "words" in cur and "words" in nxt:
+                    cur["words"].extend(nxt.get("words", []))
+                i += 1
+            else:
+                break
+        
+        merged.append(cur)
+        i += 1
+
+    return merged
 
 
 # ==============================================================================
@@ -323,6 +427,9 @@ def transcribe_media_to_srt(media_path, asr_model="large-v3", source_lang="en", 
     for seg in raw_segments:
         sub_segs = split_segment_into_dialogue_sentences(seg)
         fine_segments.extend(sub_segs)
+
+    # Consolidation et fusion globale des micro-fragments et répliques immédiates
+    fine_segments = clean_and_merge_dialogue_segments(fine_segments, max_dur=4.5, max_gap=0.6)
 
     # Détection si plusieurs locuteurs sont étiquetés (ex: Gemini ou Diarization)
     speakers_in_result = set(s.get("speaker") for s in fine_segments if s.get("speaker"))
@@ -448,11 +555,68 @@ Speaker X: [émotion] Texte français adapté
 
 (Ne mets JAMAIS de crochets autour de 'Speaker X'. Ne renvoie AUCUN commentaire, explication ou balise markdown ```. Commence directement par le numéro 1)."""
 
-def adapt_script_gemini(srt_text, custom_prompt=None, model_name="gemini-3.5-flash-lite"):
+def enforce_srt_timestamps(generated_srt, original_srt):
     """
-    Envoie le script SRT complet à Gemini en un seul appel API pour produire le script de doublage adapté.
+    Garantit une fidélité temporelle absolue à 100% :
+    Pour chaque bloc numéroté k dans le texte généré par l'IA,
+    remplace l'horodatage généré par l'horodatage EXACT d'origine du bloc k de original_srt.
+    Élimine mathématiquement toute hallucination d'horodatage (ex: 00:01:10 -> 00:10:10).
     """
-    if not srt_text or not srt_text.strip():
+    if not generated_srt or not original_srt:
+        return generated_srt
+
+    gen_norm = generated_srt.replace('\r\n', '\n')
+    orig_norm = original_srt.replace('\r\n', '\n')
+
+    # Extraction des horodatages d'origine par numéro d'index
+    orig_pattern = re.compile(
+        r'(?:\A|\n)\s*(\d+)\s*\n\s*(\d{1,2}:\d{2}:\d{2}[,\.]\d{3}\s*-->\s*\d{1,2}:\d{2}:\d{2}[,\.]\d{3})'
+    )
+    orig_matches = orig_pattern.findall(orig_norm)
+    if not orig_matches:
+        return generated_srt
+
+    orig_time_map = {int(num): time_str.strip() for num, time_str in orig_matches}
+
+    def replace_time(m):
+        prefix = m.group(1)
+        idx = int(m.group(2))
+        gen_time = m.group(3)
+        orig_time = orig_time_map.get(idx)
+        if orig_time:
+            return f"{prefix}{idx}\n{orig_time}"
+        return f"{prefix}{idx}\n{gen_time}"
+
+    gen_pattern = re.compile(
+        r'(^|\n)\s*(\d+)\s*\n\s*(\d{1,2}:\d{2}:\d{2}[,\.]\d{3}\s*-->\s*\d{1,2}:\d{2}:\d{2}[,\.]\d{3})',
+        re.MULTILINE
+    )
+    return gen_pattern.sub(replace_time, gen_norm)
+
+
+def split_srt_into_cue_chunks(srt_text, chunk_size=70):
+    """
+    Découpe un texte SRT en sous-blocs de N répliques (cues) complètes
+    pour éviter d'atteindre la limite max_output_tokens (8192) des LLM.
+    """
+    clean_text = srt_text.replace('\r\n', '\n').strip()
+    raw_blocks = re.split(r'\n\s*\n', clean_text)
+    valid_blocks = [b.strip() for b in raw_blocks if b.strip() and re.search(r'\d{1,2}:\d{2}:\d{2}', b)]
+    if len(valid_blocks) <= chunk_size:
+        return [clean_text]
+
+    chunks = []
+    for i in range(0, len(valid_blocks), chunk_size):
+        chunk = "\n\n".join(valid_blocks[i:i + chunk_size])
+        chunks.append(chunk)
+    return chunks
+
+
+def _call_gemini_or_groq_srt(input_text, sys_instruction, model_name="gemini-3.5-flash-lite"):
+    """
+    Exécute l'appel API LLM (Gemini avec fallback Groq) pour un segment de texte SRT.
+    """
+    if not input_text or not input_text.strip():
         return ""
 
     from soni_translate.translate_segments import get_gemini_api_keys
@@ -463,8 +627,6 @@ def adapt_script_gemini(srt_text, custom_prompt=None, model_name="gemini-3.5-fla
     from google import genai
     from google.genai import types
 
-    sys_instruction = custom_prompt.strip() if custom_prompt and custom_prompt.strip() else FAST_DUB_MASTER_PROMPT
-
     candidates = [model_name, "gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"]
     last_err = None
 
@@ -472,10 +634,9 @@ def adapt_script_gemini(srt_text, custom_prompt=None, model_name="gemini-3.5-fla
         client = genai.Client(api_key=key)
         for m in candidates:
             try:
-                logger.info(f"FastDub Gemini : Envoi du script complet ({len(srt_text)} car.) vers '{m}'...")
                 response = client.models.generate_content(
                     model=m,
-                    contents=srt_text.strip(),
+                    contents=input_text.strip(),
                     config=types.GenerateContentConfig(
                         system_instruction=sys_instruction,
                         temperature=0.3,
@@ -483,16 +644,15 @@ def adapt_script_gemini(srt_text, custom_prompt=None, model_name="gemini-3.5-fla
                     )
                 )
                 raw_out = response.text.strip()
-                # Nettoyage des balises markdown et préambules
                 clean_out = re.sub(r'^```(?:srt)?\s*', '', raw_out)
                 clean_out = re.sub(r'\s*```$', '', clean_out).strip()
-                first_num_match = re.search(r'(?:\A|\n)(1\s*\n\s*\d{1,2}:\d{2}:\d{2})', clean_out)
+                first_num_match = re.search(r'(?:\A|\n)(\d+\s*\n\s*\d{1,2}:\d{2}:\d{2})', clean_out)
                 if first_num_match:
                     clean_out = clean_out[first_num_match.start(1):].strip()
                 return clean_out
             except Exception as e:
                 last_err = e
-                logger.warning(f"FastDub Gemini tentative '{m}' a échoué ({e}). Essai suivant...")
+                logger.warning(f"FastDub LLM tentative '{m}' a échoué ({e}). Essai suivant...")
                 continue
 
     # Fallback optionnel Groq si Gemini échoue
@@ -506,7 +666,7 @@ def adapt_script_gemini(srt_text, custom_prompt=None, model_name="gemini-3.5-fla
             chat = g_client.chat.completions.create(
                 messages=[
                     {"role": "system", "content": sys_instruction},
-                    {"role": "user", "content": srt_text.strip()}
+                    {"role": "user", "content": input_text.strip()}
                 ],
                 model="llama-3.3-70b-versatile",
                 temperature=0.3,
@@ -515,7 +675,7 @@ def adapt_script_gemini(srt_text, custom_prompt=None, model_name="gemini-3.5-fla
             raw_groq = chat.choices[0].message.content.strip()
             clean_groq = re.sub(r'^```(?:srt)?\s*', '', raw_groq)
             clean_groq = re.sub(r'\s*```$', '', clean_groq).strip()
-            first_num_match = re.search(r'(?:\A|\n)(1\s*\n\s*\d{1,2}:\d{2}:\d{2})', clean_groq)
+            first_num_match = re.search(r'(?:\A|\n)(\d+\s*\n\s*\d{1,2}:\d{2}:\d{2})', clean_groq)
             if first_num_match:
                 clean_groq = clean_groq[first_num_match.start(1):].strip()
             return clean_groq
@@ -525,6 +685,33 @@ def adapt_script_gemini(srt_text, custom_prompt=None, model_name="gemini-3.5-fla
     if last_err:
         raise last_err
     return ""
+
+
+def adapt_script_gemini(srt_text, custom_prompt=None, model_name="gemini-3.5-flash-lite"):
+    """
+    Envoie le script SRT complet à Gemini (par lots si > 70 répliques) pour produire le script de doublage adapté.
+    Garantit une fidélité temporelle absolue et aucune troncature de jetons.
+    """
+    if not srt_text or not srt_text.strip():
+        return ""
+
+    sys_instruction = custom_prompt.strip() if custom_prompt and custom_prompt.strip() else FAST_DUB_MASTER_PROMPT
+
+    chunks = split_srt_into_cue_chunks(srt_text, chunk_size=70)
+    adapted_parts = []
+
+    for idx, chk in enumerate(chunks):
+        if len(chunks) > 1:
+            logger.info(f"FastDub Gemini : Adaptation du lot {idx + 1}/{len(chunks)} ({len(chk)} car.)...")
+        else:
+            logger.info(f"FastDub Gemini : Adaptation du script ({len(chk)} car.)...")
+        part = _call_gemini_or_groq_srt(chk, sys_instruction, model_name=model_name)
+        adapted_parts.append(part)
+
+    full_adapted = "\n\n".join(p for p in adapted_parts if p.strip()).strip()
+    # Rétablissement strict des horodatages originaux pour éliminer toute hallucination
+    full_adapted = enforce_srt_timestamps(full_adapted, srt_text)
+    return full_adapted
 
 
 def translate_dubbing_script(script_text, target_lang="fr", model_name="gemini-3.5-flash-lite"):
@@ -565,14 +752,6 @@ def translate_dubbing_script(script_text, target_lang="fr", model_name="gemini-3
 
     logger.info(f"FastDub : Traduction et localisation du script vers '{clean_name}' ({clean_code})...")
 
-    from soni_translate.translate_segments import get_gemini_api_keys
-    keys = get_gemini_api_keys()
-    if not keys:
-        raise ValueError("Clé GOOGLE_API_KEY manquante. Renseigne ta clé Gemini pour utiliser l'adaptation multilingue.")
-
-    from google import genai
-    from google.genai import types
-
     translate_instruction = f"""**RÔLE :**
 Tu es un Expert Adaptateur et Directeur Artistique de Doublage Rythmique Multimodal.
 Ta mission : traduire et adapter localement ce script de doublage français pour des vidéos de type "Gold Digger Prank" / caméras cachées vers la langue cible : **{clean_name} ({clean_code})**.
@@ -591,65 +770,20 @@ Ta mission : traduire et adapter localement ce script de doublage français pour
    HH:MM:SS,mmm --> HH:MM:SS,mmm
    Speaker X: [émotion] Texte traduit et adapté
 
-(Commence directement par le numéro 1 sans aucun commentaire, explication ou balises markdown ```)."""
+(Commence directement par le premier numéro de bloc sans aucun commentaire, explication ou balises markdown ```)."""
 
-    candidates = [model_name, "gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"]
-    last_err = None
+    chunks = split_srt_into_cue_chunks(script_text, chunk_size=70)
+    translated_parts = []
 
-    for key in keys:
-        client = genai.Client(api_key=key)
-        for m in candidates:
-            try:
-                response = client.models.generate_content(
-                    model=m,
-                    contents=script_text.strip(),
-                    config=types.GenerateContentConfig(
-                        system_instruction=translate_instruction,
-                        temperature=0.3,
-                        max_output_tokens=8192
-                    )
-                )
-                raw_out = response.text.strip()
-                clean_out = re.sub(r'^```(?:srt)?\s*', '', raw_out)
-                clean_out = re.sub(r'\s*```$', '', clean_out).strip()
-                first_num_match = re.search(r'(?:\A|\n)(1\s*\n\s*\d{1,2}:\d{2}:\d{2})', clean_out)
-                if first_num_match:
-                    clean_out = clean_out[first_num_match.start(1):].strip()
-                return clean_out
-            except Exception as e:
-                last_err = e
-                logger.warning(f"FastDub Gemini Traduction '{m}' a échoué ({e}). Essai suivant...")
-                continue
+    for idx, chk in enumerate(chunks):
+        if len(chunks) > 1:
+            logger.info(f"FastDub : Traduction vers {clean_name} du lot {idx + 1}/{len(chunks)}...")
+        part = _call_gemini_or_groq_srt(chk, translate_instruction, model_name=model_name)
+        translated_parts.append(part)
 
-    # Fallback optionnel Groq
-    groq_key = os.getenv("GROQ_API_KEY") or os.getenv("groq_api_key")
-    if groq_key:
-        try:
-            from openai import OpenAI
-            import httpx
-            g_client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key, http_client=httpx.Client(timeout=60))
-            chat = g_client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": translate_instruction},
-                    {"role": "user", "content": script_text.strip()}
-                ],
-                model="llama-3.3-70b-versatile",
-                temperature=0.3,
-                max_tokens=8000
-            )
-            raw_groq = chat.choices[0].message.content.strip()
-            clean_groq = re.sub(r'^```(?:srt)?\s*', '', raw_groq)
-            clean_groq = re.sub(r'\s*```$', '', clean_groq).strip()
-            first_num_match = re.search(r'(?:\A|\n)(1\s*\n\s*\d{1,2}:\d{2}:\d{2})', clean_groq)
-            if first_num_match:
-                clean_groq = clean_groq[first_num_match.start(1):].strip()
-            return clean_groq
-        except Exception as ge:
-            logger.error(f"Secours Groq Traduction FastDub échoué : {ge}")
-
-    if last_err:
-        raise last_err
-    return script_text.strip()
+    full_translated = "\n\n".join(p for p in translated_parts if p.strip()).strip()
+    full_translated = enforce_srt_timestamps(full_translated, script_text)
+    return full_translated
 
 
 
