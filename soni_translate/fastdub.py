@@ -289,10 +289,12 @@ def split_segment_into_dialogue_sentences(seg):
     return sub_segs
 
 
-def clean_and_merge_dialogue_segments(segments, max_dur=4.5, max_gap=0.6):
+def merge_only_broken_word_fragments(segments, max_gap=0.9):
     """
-    Passe de fusion globale : regroupe les micro-fragments orphelins (< 3 mots ou durée < 0.8s)
-    avec leurs répliques voisines pour assurer des dialogues fluides et stables.
+    Rattache UNIQUEMENT les fragments grammaticaux incomplets (mots orphelins sans ponctuation)
+    à leur phrase suivante (ex: "You" + "look amazing." -> "You look amazing.").
+    NE FUSIONNE JAMAIS deux répliques complètes ayant une ponctuation de fin ([.?!…])
+    afin de préserver STRICTEMENT la séparation des locuteurs (Speaker 1 / Speaker 2).
     """
     if not segments or len(segments) <= 1:
         return segments
@@ -305,34 +307,21 @@ def clean_and_merge_dialogue_segments(segments, max_dur=4.5, max_gap=0.6):
         while i + 1 < len(segments):
             nxt = segments[i + 1]
             gap = float(nxt["start"]) - float(cur["end"])
-            comb_dur = float(nxt["end"]) - float(cur["start"])
             
             cur_text = cur.get("text", "").strip()
             nxt_text = nxt.get("text", "").strip()
             cur_words = cur_text.split()
-            nxt_words = nxt_text.split()
             
             clean_last = re.sub(r'^[^\w]+|[^\w]+$', '', cur_words[-1] if cur_words else '').lower()
             ends_punct = cur_text[-1:] in ['.', '!', '?', '…']
             
-            should_merge = False
-            # Cas 1 : Mot pendant ou phrase inachevée (sans ponctuation, ou mot orphelin)
-            if not ends_punct or clean_last in DANGLING_WORDS:
-                if gap <= 1.0 and comb_dur <= max_dur:
-                    should_merge = True
-            # Cas 2 : Micro-fragment absolu (< 3 mots ou < 0.7s) avec silence court
-            elif (len(cur_words) < 3 or (float(cur["end"]) - float(cur["start"])) < 0.7) and gap <= 0.4:
-                if comb_dur <= max_dur:
-                    should_merge = True
-            # Cas 3 : Le suivant est un micro-fragment
-            elif (len(nxt_words) < 3 or (float(nxt["end"]) - float(nxt["start"])) < 0.7) and gap <= 0.4:
-                if comb_dur <= max_dur:
-                    should_merge = True
-            # Cas 4 : Deux phrases très courtes enchaînées rapidement par la même personne (gap < 0.25s)
-            elif gap <= 0.25 and (len(cur_words) + len(nxt_words)) <= 10 and comb_dur <= 3.8:
-                should_merge = True
+            # Ne fusionne QUE si cur est manifestement un mot brisé/incomplet (sans ponctuation de fin)
+            is_broken_fragment = False
+            if not ends_punct:
+                if len(cur_words) == 1 or clean_last in DANGLING_WORDS:
+                    is_broken_fragment = True
 
-            if should_merge:
+            if is_broken_fragment and gap <= max_gap:
                 cur["end"] = nxt["end"]
                 cur["text"] = f"{cur_text} {nxt_text}".strip()
                 if "words" in cur and "words" in nxt:
@@ -428,8 +417,8 @@ def transcribe_media_to_srt(media_path, asr_model="large-v3", source_lang="en", 
         sub_segs = split_segment_into_dialogue_sentences(seg)
         fine_segments.extend(sub_segs)
 
-    # Consolidation et fusion globale des micro-fragments et répliques immédiates
-    fine_segments = clean_and_merge_dialogue_segments(fine_segments, max_dur=4.5, max_gap=0.6)
+    # Rattachement exclusif des mots orphelins (ex: "You" + "look amazing.") sans jamais fusionner deux répliques distinctes
+    fine_segments = merge_only_broken_word_fragments(fine_segments, max_gap=0.9)
 
     # Détection si plusieurs locuteurs sont étiquetés (ex: Gemini ou Diarization)
     speakers_in_result = set(s.get("speaker") for s in fine_segments if s.get("speaker"))
@@ -553,45 +542,84 @@ Numéro
 HH:MM:SS,mmm --> HH:MM:SS,mmm
 Speaker X: [émotion] Texte français adapté
 
-(Ne mets JAMAIS de crochets autour de 'Speaker X'. Ne renvoie AUCUN commentaire, explication ou balise markdown ```. Commence directement par le numéro 1)."""
+**RÈGLE D'OR ABSOLUE : UN SEUL LOCUTEUR PAR BLOC SRT !**
+Chaque numéro de bloc SRT correspond à UNE SEULE personne qui parle (Speaker 1 OU Speaker 2).
+- INTERDICTION ABSOLUE de mettre deux répliques pour deux personnes dans le même bloc.
+- INTERDICTION ABSOLUE d'utiliser des tirets '-' de dialogue pour faire parler deux personnes dans un même bloc (ex: "Attends, c'est ta caisse ? - Ouais, c'est ma caisse." est TOTALEMENT INTERDIT).
+- Chaque bloc SRT en entrée est la réplique d'UNE SEULE personne. Traduis UNIQUEMENT ce que dit cette personne dans ce bloc sans inventer la suite ou la réponse !
+- Chaque bloc SRT doit comporter EXACTEMENT 3 lignes :
+  1. Le numéro
+  2. L'horodatage original
+  3. "Speaker X: [émotion] Texte français"
+
+(Ne mets JAMAIS de crochets autour de 'Speaker X'. Ne renvoie AUCUN commentaire, explication ou balise markdown ```. Commence directement par le premier numéro de bloc)."""
 
 def enforce_srt_timestamps(generated_srt, original_srt):
     """
-    Garantit une fidélité temporelle absolue à 100% :
+    Assure une fidélité temporelle absolue à 100% :
     Pour chaque bloc numéroté k dans le texte généré par l'IA,
-    remplace l'horodatage généré par l'horodatage EXACT d'origine du bloc k de original_srt.
-    Élimine mathématiquement toute hallucination d'horodatage (ex: 00:01:10 -> 00:10:10).
+    remplace intégralement la ligne d'horodatage par l'horodatage EXACT d'origine
+    du bloc k de original_srt, peu importe le format ou les hallucinations du LLM.
     """
     if not generated_srt or not original_srt:
         return generated_srt
 
-    gen_norm = generated_srt.replace('\r\n', '\n')
-    orig_norm = original_srt.replace('\r\n', '\n')
+    gen_norm = generated_srt.replace('\r\n', '\n').strip()
+    orig_norm = original_srt.replace('\r\n', '\n').strip()
 
-    # Extraction des horodatages d'origine par numéro d'index
-    orig_pattern = re.compile(
-        r'(?:\A|\n)\s*(\d+)\s*\n\s*(\d{1,2}:\d{2}:\d{2}[,\.]\d{3}\s*-->\s*\d{1,2}:\d{2}:\d{2}[,\.]\d{3})'
-    )
-    orig_matches = orig_pattern.findall(orig_norm)
-    if not orig_matches:
+    # 1. Extraction de tous les blocs d'origine
+    orig_time_map = {}
+    raw_orig_blocks = re.split(r'\n\s*\n', orig_norm)
+    for b in raw_orig_blocks:
+        b_lines = [l.strip() for l in b.split('\n') if l.strip()]
+        if len(b_lines) >= 2:
+            idx_match = re.match(r'^(\d+)$', b_lines[0])
+            time_match = re.search(r'(\d{1,2}:\d{2}:\d{2}[,\.]\d{3}\s*-->\s*\d{1,2}:\d{2}:\d{2}[,\.]\d{3})', b_lines[1])
+            if idx_match and time_match:
+                orig_time_map[int(idx_match.group(1))] = time_match.group(1).replace('.', ',')
+
+    if not orig_time_map:
         return generated_srt
 
-    orig_time_map = {int(num): time_str.strip() for num, time_str in orig_matches}
+    # 2. Reconstruction des blocs générés
+    raw_gen_blocks = re.split(r'\n\s*\n', gen_norm)
+    reconstructed_blocks = []
 
-    def replace_time(m):
-        prefix = m.group(1)
-        idx = int(m.group(2))
-        gen_time = m.group(3)
-        orig_time = orig_time_map.get(idx)
-        if orig_time:
-            return f"{prefix}{idx}\n{orig_time}"
-        return f"{prefix}{idx}\n{gen_time}"
+    for b in raw_gen_blocks:
+        lines = [l.strip() for l in b.split('\n') if l.strip()]
+        if not lines:
+            continue
 
-    gen_pattern = re.compile(
-        r'(^|\n)\s*(\d+)\s*\n\s*(\d{1,2}:\d{2}:\d{2}[,\.]\d{3}\s*-->\s*\d{1,2}:\d{2}:\d{2}[,\.]\d{3})',
-        re.MULTILINE
-    )
-    return gen_pattern.sub(replace_time, gen_norm)
+        idx = None
+        start_line_idx = 0
+        for i, l in enumerate(lines):
+            m = re.match(r'^(\d+)$', l)
+            if m:
+                idx = int(m.group(1))
+                start_line_idx = i
+                break
+
+        if idx is None or idx not in orig_time_map:
+            reconstructed_blocks.append("\n".join(lines))
+            continue
+
+        orig_time = orig_time_map[idx]
+        
+        content_lines = []
+        found_arrow = False
+        for l in lines[start_line_idx + 1:]:
+            if '-->' in l and not found_arrow:
+                found_arrow = True
+                continue
+            content_lines.append(l)
+
+        if not found_arrow and len(lines) > start_line_idx + 1:
+            content_lines = lines[start_line_idx + 2:]
+
+        content_str = "\n".join(content_lines).strip()
+        reconstructed_blocks.append(f"{idx}\n{orig_time}\n{content_str}")
+
+    return "\n\n".join(reconstructed_blocks).strip()
 
 
 def split_srt_into_cue_chunks(srt_text, chunk_size=70):
