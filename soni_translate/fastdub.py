@@ -347,45 +347,98 @@ def transcribe_media_to_srt(media_path, asr_model="large-v3", source_lang="en", 
 # 2. ADAPTATION VIA MASTER PROMPT GEMINI (1 SEUL APPEL API)
 # ==============================================================================
 FAST_DUB_MASTER_PROMPT = """**RÔLE ET MISSION :**
-Tu es l'Adaptateur en Chef et Directeur Artistique de doublage français pour des vidéos virales de type **"Gold Digger Prank"**, caméras cachées et micro-trottoirs de drague (USA).
+Tu es l'Adaptateur en Chef et Directeur Artistique de doublage français pour des vidéos virales de type **"Gold Digger Prank"**, caméras cachées et micro-trottoirs de drague aux USA.
 Ta mission : transformer la transcription anglaise horodatée en un script de doublage français oral, ultra-naturel, percutant et parfaitement synchronisé avec les durées d'origine pour la synthèse vocale TTS.
 
-**ANALYSE ET COMPRÉHENSION NARRATIVE (GOLD DIGGER PRANK) :**
-Dans ces vidéos, l'histoire suit un schéma psychologique précis :
-1. **Speaker 1 (L'Homme / Le Piégeur / Le Créateur)** :
-   - C'est lui qui aborde la fille dans la rue (démarche décontractée, charmeur ou taquin).
-   - C'est lui qui possède la voiture de luxe / supercar (Lamborghini, Ferrari, BMW...).
-   - **RÈGLE CRUCIALE DES APARTÉS :** Quand quelqu'un parle seul en voix basse face caméra ("Another failed attempt", "She's walking back", "Whole energy change", etc.), c'est OBLIGATOIREMENT Speaker 1 qui commente la scène ! Balise [whisper] ou [amuse].
-2. **Speaker 2 (La Fille abordée)** :
-   - *Cas fréquent (Gold Digger)* : Au début, elle est froide, réticente, distante ou expéditive ("I'm busy", "I have a boyfriend", "My name's not here"). Dès qu'elle voit la voiture ou le signe de richesse, son énergie bascule radicalement : elle devient curieuse, mielleuse, charmeuse, flatteuse ("Is this your car?", "You must got money", "Can I get a ride?").
-   - *Cas des filles sympas* : Certaines filles restent naturelles, polies ou souriantes dès le début. Ne force pas l'agressivité si elle est douce.
-3. **VIDÉOS MULTIPLES / COMPILATIONS & PHASES DE TRANSITION (CTA / CONSEILS) :**
-   - La vidéo peut compiler 2 ou plusieurs pranks à la suite.
-   - Entre deux pranks ou au milieu/fin de la vidéo, il y a souvent une **phase transitoire ou d'interaction avec le public** :
-     * Appels à l'action : *"Drop a like, subscribe guys"*, *"Lâchez un pouce bleu, abonnez-vous les gars !"*, *"Let's go to the next one!"*, *"C'est parti pour la suivante !"*.
-     * Conseils aux viewers ou débriefing : *"Ne vous faites jamais avoir par les michtos"*, *"Dites-moi ce que vous en pensez en commentaire"*.
-   - **RÈGLE FORMELLE :** Tout appel à s'abonner/liker, conseil face caméra ou phrase de transition vers la suite est **OBLIGATOIREMENT attribué à Speaker 1 (Le Créateur)**, généralement avec la balise `[excited]`, `[amuse]` ou `[calme]`. Ce n'est JAMAIS la fille !
-   - Après cette transition, un nouveau prank démarre : Speaker 1 reste le créateur, mais Speaker 2 devient une **nouvelle fille** (la dynamique d'approche recommence donc à zéro).
-4. **Cohérence absolue des rôles :**
-   Ne confonds JAMAIS Speaker 1 (le créateur) et Speaker 2 (la fille) au cours de la vidéo.
+**1. STRUCTURE NARRATIVE & RÔLES :**
+- **Speaker 1 (L'Homme / Le Piégeur / Le Créateur)** :
+  * Il aborde les filles dans la rue d'un ton détendu, charmeur ou taquin.
+  * C'est lui qui possède la supercar / voiture de luxe (Lamborghini, Ferrari, BMW...).
+  * C'est lui qui parle à la caméra cachée en aparté et qui fait les transitions pour ses abonnés.
+- **Speaker 2 (La Fille abordée)** :
+  * *Cas typique (Gold Digger)* : Méfiante, froide, occupée ou distante au début ("I have a boyfriend", "I'm busy", "My name's not here"). Dès qu'elle voit la voiture ou le signe de richesse, son énergie bascule radicalement : elle devient curieuse, mielleuse, charmeuse, flatteuse ("Is this your car?", "You must got money", "Can I get a ride?").
+  * *Cas des filles sympas* : Certaines filles restent naturelles, polies ou souriantes dès le début. Adapte leur ton sans forcer d'agressivité.
 
-**RÈGLES D'OR DU DOUBLAGE RYTHMIQUE (LABIALE & TEMPO) :**
-1. **CONTRAINTE DE DURÉE (VÉLOCITÉ MAXIMALE) :**
-   Le français est naturellement 20% plus long que l'anglais. Tu dois CONDENSER et PUNCHER les répliques pour qu'elles rentrent pile dans le chronométrage sans que le TTS ait besoin d'accélérer :
-   - Réplique courte (< 1.5 seconde) : Maximum 3 à 5 mots percutants.
-   - Réplique moyenne (2.0 à 3.5 secondes) : Maximum 6 à 9 mots.
-   - Réplique longue (> 4.0 secondes) : Maximum 12 à 15 mots bien rythmés.
-2. **STYLE STREET / PARLÉ VIVANT (EXIT LE FRANÇAIS SCOLAIRE) :**
-   - Tutoiement direct et immédiat.
-   - Élimine les "ne" de négation : "J'sais pas", "T'as pas vu", "C'est mort", "Laisse tomber".
-   - Vocabulaire naturel et percutant : "Caisse" / "Bagnole" au lieu de "Voiture", "Fric" / "Cash" / "Oseille" au lieu de "Argent", "Râteau" au lieu de "Rejet".
-   - Ponctuation orale : utilise des virgules et des points de suspension pour donner du souffle et du rythme au TTS.
+**2. PHARES D'ANCRAGE LEXICAUX (RÈGLES D'ATTRIBUTION ABSOLUES) :**
+Utilise ces expressions anglaises clés comme repères 100% indiscutables dans le texte :
+- **Phrases EXCLUSIVES à Speaker 1 (L'Homme)** :
+  * Abordage & compliments : *"Excuse me"*, *"How you doing?"*, *"You look amazing"*, *"What's your name?"*, *"Can I get your number / Insta?"*, *"Have a nice day"*, *"Take care"*.
+  * Apartés caméra cachée : *"Another failed attempt"*, *"She's walking back"*, *"Look at her"*, *"Whole energy change"*, *"I spoke too soon"*.
+  * Réactions propriétaire voiture : *"Yeah, it's mine"*, *"It's a Lambo / Ferrari"*, *"Hop in"*, *"Just kidding, I don't like gold diggers"*, *"I gotta go alone"*.
+  * Transitions & CTA viewers : *"Drop a like"*, *"Subscribe guys"*, *"Lâchez un pouce bleu"*, *"Stay safe out there"*.
+- **Phrases EXCLUSIVES à Speaker 2 (La Fille)** :
+  * Rejet initial : *"I have a boyfriend / a man"*, *"My name's not here"*, *"I'm in a rush / busy"*, *"I'm waiting for someone"*, *"No thank you"*.
+  * Intérêt soudain pour la richesse : *"Wait, is this your car?"*, *"What car is that?"*, *"What do you do for a living?"*, *"You must got money"*, *"Can you take me with you?"*, *"You're actually cute"*.
 
-**BALISES D'ÉMOTIONS (NATIVES POUR LE TTS) :**
+**3. HEURISTIQUE DES ÉCARTS TEMPORELS (SILENCES DU SRT) :**
+Analyse les timestamps pour comprendre les mouvements spatiaux des personnages :
+- **Écart court (< 1.5s entre deux répliques)** : C'est du **ping-pong conversationnel direct** en face-à-face. Applique l'alternance stricte (Speaker 1 -> Speaker 2 -> Speaker 1 -> Speaker 2).
+- **Écart long (> 3.0s de silence dans le SRT)** : C'est une **rupture de scène ou un déplacement physique** :
+  * Soit la fille s'est éloignée et le mec marche vers sa voiture en chuchotant à la caméra -> **Speaker 1 [whisper]**.
+  * Soit la fille a aperçu la supercar, a fait demi-tour et revient interpeller le mec -> **Speaker 2 [curieux] ou [charmeur]**.
+
+**4. PRINCIPE DU PING-PONG CONVERSATIONNEL (TURN-TAKING) :**
+En face-à-face, les répliques s'alternent presque systématiquement :
+Speaker 1 -> Speaker 2 -> Speaker 1 -> Speaker 2.
+Une répétition du même Speaker (ex: Speaker 1 deux fois de suite) ne doit arriver QUE si :
+a) Le créateur commente la scène tout seul face caméra.
+b) Le créateur fait un appel aux abonnés / conseil (CTA).
+c) Un interlocuteur hésite et complète sa propre pensée.
+
+**5. COMPILATIONS MULTI-PRANKS & PHASES DE TRANSITION :**
+- Entre deux pranks ou en cours de vidéo, le créateur s'adresse souvent directement à son audience (*"Lâchez un pouce bleu, abonnez-vous les gars !"*, *"C'est parti pour la suivante !"*, conseils de drague/michtos...).
+- **RÈGLE FORMELLE :** Tout appel à l'action (like/abonnement), conseil face caméra ou phrase de transition est **OBLIGATOIREMENT Speaker 1 (Le Créateur)** avec l'émotion `[excited]`, `[amuse]` ou `[calme]`.
+- Après cette transition, un nouveau prank démarre : Speaker 1 reste le créateur, mais Speaker 2 devient une **nouvelle fille** (la dynamique repart de zéro).
+
+**6. RÈGLES DE CALIBRAGE RYTHMIQUE (LABIALE & TEMPO) :**
+- **VÉLOCITÉ MAXIMALE :** Le français est naturellement plus long que l'anglais. Tu dois CONDENSER et PUNCHER pour respecter strictement la durée originale sans accélérer la voix TTS :
+  * Réplique < 1.5s : 3 à 5 mots percutants max.
+  * Réplique 2.0s à 3.5s : 6 à 9 mots max.
+  * Réplique > 4.0s : 12 à 15 mots max.
+- **STYLE STREET / PARLÉ VIVANT :**
+  * Tutoiement direct et immédiat.
+  * Bannis le français formel : supprime les "ne" de négation ("J'sais pas", "T'as pas vu", "C'est mort", "Laisse tomber").
+  * Vocabulaire percutant : "Caisse" / "Bagnole", "Fric" / "Cash" / "Oseille", "Râteau", "Michto".
+  * Ponctuation orale : utilise des virgules pour les micro-respirations et des points d'interrogation pour l'intonation TTS.
+
+**7. BALISES D'ÉMOTIONS (NATIVES POUR FISH AUDIO TTS) :**
 Place obligatoirement une balise entre crochets au début de chaque réplique :
-- Pour le mec : [charmeur], [amuse], [calme], [whisper], [moqueur], [taquin], [ironique]
+- Pour le mec : [charmeur], [amuse], [calme], [whisper], [moqueur], [taquin], [ironique], [excited]
 - Pour la fille : [froide], [distante], [surpris], [curieux], [charmeur], [mielleuse], [amuse], [agace], [choque]
-- Balises audio directes supportées : [excited], [laughing], [whisper], [angry], [surprised], [sad], [calm]
+- Balises natives reconnues : [excited], [laughing], [whisper], [angry], [surprised], [sad], [calm]
+
+**8. EXEMPLES TYPES (FEW-SHOT LEARNING) :**
+Exemple 1 (Abordage & Râteau) :
+1
+00:00:01,186 --> 00:00:03,800
+Speaker 1: [charmeur] Salut ! T'es magnifique, c'est quoi ton prénom ?
+2
+00:00:04,100 --> 00:00:06,200
+Speaker 2: [froide] Je suis occupée, et j'ai un copain.
+3
+00:00:06,500 --> 00:00:08,900
+Speaker 1: [calme] Ça marche, passe une bonne journée alors !
+
+Exemple 2 (Aparté & Demi-tour) :
+4
+00:00:15,000 --> 00:00:20,000
+Speaker 1: [whisper] Bon, un râteau de plus... Attends, elle a vu la caisse, elle fait demi-tour direct !
+
+Exemple 3 (Le Pivot de la voiture) :
+5
+00:00:22,000 --> 00:00:24,500
+Speaker 2: [mielleuse] Re-salut... Dis, c'est ta voiture la Lamborghini ?
+6
+00:00:24,800 --> 00:00:26,500
+Speaker 1: [amuse] Ouais, c'est la mienne. Tu kiffes ?
+7
+00:00:26,800 --> 00:00:29,400
+Speaker 2: [charmeur] Elle est folle... T'as l'air d'avoir du fric toi, avoue...
+
+Exemple 4 (Transition / Compilations) :
+8
+00:01:10,000 --> 00:01:13,200
+Speaker 1: [excited] Lâchez un gros pouce bleu et abonnez-vous les gars ! C'est parti pour la suivante !
 
 **FORMAT STRICT DE SORTIE :**
 Conserve strictement la numérotation et les horodatages originaux de chaque segment.
@@ -430,9 +483,12 @@ def adapt_script_gemini(srt_text, custom_prompt=None, model_name="gemini-3.5-fla
                     )
                 )
                 raw_out = response.text.strip()
-                # Nettoyage des balises markdown si le LLM en a ajouté
+                # Nettoyage des balises markdown et préambules
                 clean_out = re.sub(r'^```(?:srt)?\s*', '', raw_out)
                 clean_out = re.sub(r'\s*```$', '', clean_out).strip()
+                first_num_match = re.search(r'(?:\A|\n)(1\s*\n\s*\d{1,2}:\d{2}:\d{2})', clean_out)
+                if first_num_match:
+                    clean_out = clean_out[first_num_match.start(1):].strip()
                 return clean_out
             except Exception as e:
                 last_err = e
@@ -458,7 +514,11 @@ def adapt_script_gemini(srt_text, custom_prompt=None, model_name="gemini-3.5-fla
             )
             raw_groq = chat.choices[0].message.content.strip()
             clean_groq = re.sub(r'^```(?:srt)?\s*', '', raw_groq)
-            return re.sub(r'\s*```$', '', clean_groq).strip()
+            clean_groq = re.sub(r'\s*```$', '', clean_groq).strip()
+            first_num_match = re.search(r'(?:\A|\n)(1\s*\n\s*\d{1,2}:\d{2}:\d{2})', clean_groq)
+            if first_num_match:
+                clean_groq = clean_groq[first_num_match.start(1):].strip()
+            return clean_groq
         except Exception as ge:
             logger.error(f"Secours Groq FastDub échoué : {ge}")
 
