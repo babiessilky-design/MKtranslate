@@ -2878,30 +2878,56 @@ def create_gui(theme, logs_in_gui=False):
             gr.HTML("<hr style='margin: 15px 0;'>")
 
             with gr.Row():
-                with gr.Column():
-                    gr.Markdown("#### 📝 Transcription brute (SRT)")
+                with gr.Column(scale=1):
+                    gr.Markdown("#### 📝 1. Transcription brute (SRT)")
                     fastdub_srt_box = gr.Textbox(
-                        label="Script original horodaté (Copie ou écriture manuelle)",
+                        label="Script original horodaté (Anglais / extrait vidéo)",
                         placeholder="1\n00:00:00,249 --> 00:00:01,171\nDamn, you look amazing.\n\n2\n00:00:01,732 --> 00:00:02,394\nWhat's your name?",
                         lines=14,
                         max_lines=25
                     )
-
-                with gr.Column():
-                    gr.Markdown("#### 🎭 Script de doublage adapté (Éditable)")
-                    fastdub_dub_script_box = gr.Textbox(
-                        label="Script français synchronisé (Speaker X: [émotion] Texte)",
-                        placeholder="1\n00:00:00,249 --> 00:00:01,171\nSpeaker 1: [admiratif] Waouh, t'es magnifique.\n\n2\n00:00:01,732 --> 00:00:02,394\nSpeaker 2: [froide] Qu'est-ce que tu me veux ?",
-                        lines=14,
-                        max_lines=25
-                    )
                     with gr.Row():
-                        btn_fastdub_adapt_gemini = gr.Button("⚡ 2. Adapter via Gemini (1-Clic API)", variant="primary")
+                        btn_fastdub_adapt_gemini = gr.Button("⚡ 2. Adapter en Français ➡️", variant="primary")
                         fastdub_gemini_model = gr.Dropdown(
                             ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"],
                             value="gemini-3.5-flash-lite",
                             label="Modèle d'adaptation"
                         )
+
+                with gr.Column(scale=1):
+                    gr.Markdown("#### 🇫🇷 2. Script Français de Référence (Éditable)")
+                    fastdub_fr_script_box = gr.Textbox(
+                        label="Script français adapté (Édite et retouche facilement ici)",
+                        placeholder="1\n00:00:00,249 --> 00:00:01,171\nSpeaker 1: [charmeur] Waouh, t'es magnifique.\n\n2\n00:00:01,732 --> 00:00:02,394\nSpeaker 2: [froide] Qu'est-ce que tu me veux ?",
+                        lines=14,
+                        max_lines=25
+                    )
+                    with gr.Row():
+                        fastdub_target_lang = gr.Dropdown(
+                            [
+                                "Français (fr)",
+                                "Espagnol (es)",
+                                "Anglais (en)",
+                                "Portugais (pt)",
+                                "Italien (it)",
+                                "Allemand (de)",
+                                "Russe (ru)",
+                                "Arabe (ar)",
+                                "Japonais (ja)"
+                            ],
+                            value="Français (fr)",
+                            label="Langue cible du doublage"
+                        )
+                        btn_fastdub_translate_target = gr.Button("🌍 3. Valider / Traduire ➡️", variant="secondary")
+
+                with gr.Column(scale=1):
+                    gr.Markdown("#### 🌐 3. Script Final pour le Rendu (Éditable & TTS)")
+                    fastdub_final_script_box = gr.Textbox(
+                        label="Script final pour la synthèse vocale (Français ou traduit)",
+                        placeholder="Le script final pour la synthèse vocale s'affichera ici. Si Français : copie directe sans recalcul. Si autre langue : adaptation locale automatique.",
+                        lines=14,
+                        max_lines=25
+                    )
 
             gr.HTML("<hr style='margin: 15px 0;'>")
 
@@ -2921,7 +2947,7 @@ def create_gui(theme, logs_in_gui=False):
                         fastdub_tts_engine = gr.Dropdown(["fish_audio", "edge_tts"], value="fish_audio", label="Moteur TTS")
                         fastdub_bg_volume = gr.Slider(minimum=0.0, maximum=0.5, value=0.15, step=0.05, label="Volume fond sonore original (Ducking)")
 
-                    btn_fastdub_render = gr.Button("🎬 3. Générer le Doublage & le Média Final 🚀", variant="primary")
+                    btn_fastdub_render = gr.Button("🎬 4. Générer le Doublage & le Média Final 🚀", variant="primary")
                     fastdub_status_render = gr.Markdown("")
 
                 with gr.Column():
@@ -2943,21 +2969,33 @@ def create_gui(theme, logs_in_gui=False):
                 
                 progress(0.1, desc="Extraction audio et transcription Whisper...")
                 srt_res = transcribe_media_to_srt(vpath, asr_model=asr_model, source_lang=clean_lang)
-                return srt_res, "✅ **Transcription terminée avec succès !** Vous pouvez adapter le script à droite."
+                return srt_res, "✅ **Transcription terminée avec succès !** Vous pouvez adapter le script en français à droite."
 
-            def run_fastdub_adapt(srt_text, model_name, progress=gr.Progress()):
+            def run_fastdub_adapt(srt_text, model_name, target_lang, progress=gr.Progress()):
                 if not srt_text or not srt_text.strip():
                     raise gr.Error("Le script SRT est vide. Veuillez transcrire une vidéo ou coller un script SRT.")
                 from soni_translate.fastdub import adapt_script_gemini
-                progress(0.2, desc="Adaptation Gemini en cours...")
-                adapted = adapt_script_gemini(srt_text, model_name=model_name)
-                return adapted
+                progress(0.2, desc="Adaptation Gemini en français...")
+                adapted_fr = adapt_script_gemini(srt_text, model_name=model_name)
+                
+                # Si la langue cible choisie est le français, on copie directement vers la boîte 3 sans appel API supplémentaire
+                if "fr" in str(target_lang).lower() or "français" in str(target_lang).lower():
+                    return adapted_fr, adapted_fr
+                return adapted_fr, ""
 
-            def run_fastdub_render(media_path, script_text, spk1_voice, spk2_voice, tts_engine, bg_vol, progress=gr.Progress()):
+            def run_fastdub_translate(fr_script, target_lang, model_name, progress=gr.Progress()):
+                if not fr_script or not fr_script.strip():
+                    raise gr.Error("Le script français de référence est vide. Cliquez d'abord sur 'Adapter en Français' ou saisissez votre texte.")
+                from soni_translate.fastdub import translate_dubbing_script
+                progress(0.3, desc=f"Traduction & adaptation locale vers {target_lang}...")
+                translated = translate_dubbing_script(fr_script, target_lang=target_lang, model_name=model_name)
+                return translated
+
+            def run_fastdub_render(media_path, script_text, spk1_voice, spk2_voice, tts_engine, target_lang, bg_vol, progress=gr.Progress()):
                 if not media_path:
                     raise gr.Error("Fichier vidéo ou audio source manquant.")
                 if not script_text or not script_text.strip():
-                    raise gr.Error("Le script de doublage est vide.")
+                    raise gr.Error("Le script de doublage final (boîte 3) est vide. Validez ou traduisez votre script avant de lancer le rendu.")
                 if isinstance(media_path, list):
                     media_path = media_path[0]
                 vpath = media_path if isinstance(media_path, str) else getattr(media_path, "name", str(media_path))
@@ -2968,6 +3006,7 @@ def create_gui(theme, logs_in_gui=False):
                     speaker1_voice=spk1_voice,
                     speaker2_voice=spk2_voice,
                     tts_engine=tts_engine,
+                    target_lang=target_lang,
                     background_volume=float(bg_vol),
                     progress=progress
                 )
@@ -2982,18 +3021,25 @@ def create_gui(theme, logs_in_gui=False):
 
             btn_fastdub_adapt_gemini.click(
                 fn=run_fastdub_adapt,
-                inputs=[fastdub_srt_box, fastdub_gemini_model],
-                outputs=[fastdub_dub_script_box]
+                inputs=[fastdub_srt_box, fastdub_gemini_model, fastdub_target_lang],
+                outputs=[fastdub_fr_script_box, fastdub_final_script_box]
+            )
+
+            btn_fastdub_translate_target.click(
+                fn=run_fastdub_translate,
+                inputs=[fastdub_fr_script_box, fastdub_target_lang, fastdub_gemini_model],
+                outputs=[fastdub_final_script_box]
             )
 
             btn_fastdub_render.click(
                 fn=run_fastdub_render,
                 inputs=[
                     fastdub_media_input,
-                    fastdub_dub_script_box,
+                    fastdub_final_script_box,
                     fastdub_spk1_voice,
                     fastdub_spk2_voice,
                     fastdub_tts_engine,
+                    fastdub_target_lang,
                     fastdub_bg_volume
                 ],
                 outputs=[fastdub_video_output, fastdub_audio_output, fastdub_status_render]

@@ -527,6 +527,132 @@ def adapt_script_gemini(srt_text, custom_prompt=None, model_name="gemini-3.5-fla
     return ""
 
 
+def translate_dubbing_script(script_text, target_lang="fr", model_name="gemini-3.5-flash-lite"):
+    """
+    Traduit et adapte localement le script de doublage (par exemple du Français vers l'Espagnol, l'Anglais, etc.)
+    en préservant strictement les horodatages, les locuteurs (Speaker 1/2) et les balises d'émotions.
+    Si la langue cible est le français, renvoie directement le script sans aucun appel API.
+    """
+    if not script_text or not script_text.strip():
+        return ""
+
+    clean_code = "fr"
+    clean_name = "Français"
+    lang_mapping = {
+        "fr": "Français",
+        "es": "Espagnol",
+        "en": "Anglais",
+        "pt": "Portugais",
+        "it": "Italien",
+        "de": "Allemand",
+        "ru": "Russe",
+        "ar": "Arabe",
+        "ja": "Japonais",
+        "zh": "Chinois",
+        "ko": "Coréen"
+    }
+    raw_lower = str(target_lang).lower()
+    for code, name in lang_mapping.items():
+        if code in raw_lower or name.lower() in raw_lower:
+            clean_code = code
+            clean_name = name
+            break
+
+    # Si c'est déjà du français, aucune traduction nécessaire : copie directe instantanée !
+    if clean_code == "fr":
+        logger.info("FastDub : Langue cible française demandée, réutilisation directe du script français édité.")
+        return script_text.strip()
+
+    logger.info(f"FastDub : Traduction et localisation du script vers '{clean_name}' ({clean_code})...")
+
+    from soni_translate.translate_segments import get_gemini_api_keys
+    keys = get_gemini_api_keys()
+    if not keys:
+        raise ValueError("Clé GOOGLE_API_KEY manquante. Renseigne ta clé Gemini pour utiliser l'adaptation multilingue.")
+
+    from google import genai
+    from google.genai import types
+
+    translate_instruction = f"""**RÔLE :**
+Tu es un Expert Adaptateur et Directeur Artistique de Doublage Rythmique Multimodal.
+Ta mission : traduire et adapter localement ce script de doublage français pour des vidéos de type "Gold Digger Prank" / caméras cachées vers la langue cible : **{clean_name} ({clean_code})**.
+
+**RÈGLES D'ADAPTATION STRICTES :**
+1. **CONSERVER EXACTEMENT :**
+   - La numérotation de chaque bloc.
+   - Les horodatages exacts (HH:MM:SS,mmm --> HH:MM:SS,mmm).
+   - Les étiquettes des locuteurs ("Speaker 1:", "Speaker 2:").
+   - Les balises d'émotions entre crochets au début de chaque réplique (ex: [charmeur], [froide], [amuse], [whisper], [curieux], [excited]...).
+2. **STYLE ET LOCALISATION NATURELLE :**
+   - Traduis dans un registre **oral, vivant, jeune et contemporain (street / slang / argot naturel)** propre à la culture de la langue cible ({clean_name}).
+   - Reste percutant et condensé : le texte traduit doit respecter la durée exacte de la réplique (ne fais pas de phrases trop longues pour le TTS).
+3. **FORMAT STRICT DE SORTIE :**
+   Numéro
+   HH:MM:SS,mmm --> HH:MM:SS,mmm
+   Speaker X: [émotion] Texte traduit et adapté
+
+(Commence directement par le numéro 1 sans aucun commentaire, explication ou balises markdown ```)."""
+
+    candidates = [model_name, "gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"]
+    last_err = None
+
+    for key in keys:
+        client = genai.Client(api_key=key)
+        for m in candidates:
+            try:
+                response = client.models.generate_content(
+                    model=m,
+                    contents=script_text.strip(),
+                    config=types.GenerateContentConfig(
+                        system_instruction=translate_instruction,
+                        temperature=0.3,
+                        max_output_tokens=8192
+                    )
+                )
+                raw_out = response.text.strip()
+                clean_out = re.sub(r'^```(?:srt)?\s*', '', raw_out)
+                clean_out = re.sub(r'\s*```$', '', clean_out).strip()
+                first_num_match = re.search(r'(?:\A|\n)(1\s*\n\s*\d{1,2}:\d{2}:\d{2})', clean_out)
+                if first_num_match:
+                    clean_out = clean_out[first_num_match.start(1):].strip()
+                return clean_out
+            except Exception as e:
+                last_err = e
+                logger.warning(f"FastDub Gemini Traduction '{m}' a échoué ({e}). Essai suivant...")
+                continue
+
+    # Fallback optionnel Groq
+    groq_key = os.getenv("GROQ_API_KEY") or os.getenv("groq_api_key")
+    if groq_key:
+        try:
+            from openai import OpenAI
+            import httpx
+            g_client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key, http_client=httpx.Client(timeout=60))
+            chat = g_client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": translate_instruction},
+                    {"role": "user", "content": script_text.strip()}
+                ],
+                model="llama-3.3-70b-versatile",
+                temperature=0.3,
+                max_tokens=8000
+            )
+            raw_groq = chat.choices[0].message.content.strip()
+            clean_groq = re.sub(r'^```(?:srt)?\s*', '', raw_groq)
+            clean_groq = re.sub(r'\s*```$', '', clean_groq).strip()
+            first_num_match = re.search(r'(?:\A|\n)(1\s*\n\s*\d{1,2}:\d{2}:\d{2})', clean_groq)
+            if first_num_match:
+                clean_groq = clean_groq[first_num_match.start(1):].strip()
+            return clean_groq
+        except Exception as ge:
+            logger.error(f"Secours Groq Traduction FastDub échoué : {ge}")
+
+    if last_err:
+        raise last_err
+    return script_text.strip()
+
+
+
 # ==============================================================================
 # 3. PARSEUR DE SCRIPT DE DOUBLAGE FASTDUB
 # ==============================================================================
@@ -639,6 +765,7 @@ def render_fastdub_video(
     speaker1_voice="ref_homme_fr",
     speaker2_voice="ref_femme_fr",
     tts_engine="fish_audio",
+    target_lang="fr",
     background_volume=0.15,
     progress=None
 ):
@@ -652,7 +779,15 @@ def render_fastdub_video(
     if not dialogues:
         raise ValueError("Aucune réplique valide trouvée dans le script de doublage.")
 
-    logger.info(f"FastDub Render : {len(dialogues)} répliques à synthétiser et caler...")
+    clean_target_lang = "fr"
+    if target_lang:
+        raw_t = str(target_lang).lower()
+        for c in ["fr", "es", "en", "pt", "it", "de", "ru", "ar", "ja", "zh", "ko"]:
+            if c in raw_t:
+                clean_target_lang = c
+                break
+
+    logger.info(f"FastDub Render : {len(dialogues)} répliques à synthétiser en '{clean_target_lang}' ({tts_engine})...")
     if progress:
         progress(0.05, desc="Préparation du mixage FastDub...")
 
@@ -699,16 +834,29 @@ def render_fastdub_video(
                 fish_provider.generate(
                     text=tts_text,
                     voice=voice_chosen,
-                    target_lang="fr",
+                    target_lang=clean_target_lang,
                     output_file=out_chunk_path
                 )
             else:
-                # Secours Edge-TTS si demandé
+                # Secours Edge-TTS multilingue
                 import edge_tts
                 import asyncio
                 clean_raw_text = diag["text"]
-                edge_v = "fr-FR-DeniseNeural" if diag["speaker"] == 2 else "fr-FR-HenriNeural"
+                edge_voices_by_lang = {
+                    "fr": ("fr-FR-HenriNeural", "fr-FR-DeniseNeural"),
+                    "es": ("es-ES-AlvaroNeural", "es-ES-ElviraNeural"),
+                    "en": ("en-US-GuyNeural", "en-US-JennyNeural"),
+                    "pt": ("pt-BR-AntonioNeural", "pt-BR-FranciscaNeural"),
+                    "it": ("it-IT-DiegoNeural", "it-IT-ElsaNeural"),
+                    "de": ("de-DE-ConradNeural", "de-DE-KatjaNeural"),
+                    "ru": ("ru-RU-DmitryNeural", "ru-RU-SvetlanaNeural"),
+                    "ar": ("ar-SA-HamedNeural", "ar-SA-ZariyahNeural"),
+                    "ja": ("ja-JP-KeitaNeural", "ja-JP-NanamiNeural"),
+                }
+                m_v, f_v = edge_voices_by_lang.get(clean_target_lang, ("fr-FR-HenriNeural", "fr-FR-DeniseNeural"))
+                edge_v = f_v if diag["speaker"] == 2 else m_v
                 asyncio.run(edge_tts.Communicate(clean_raw_text, edge_v).save(out_chunk_path))
+
 
             # Lecture de l'audio généré
             if os.path.exists(out_chunk_path) and os.path.getsize(out_chunk_path) > 1000:
