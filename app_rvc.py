@@ -3966,6 +3966,70 @@ if __name__ == "__main__":
 
     lg_conf = get_language_config(language_data, language=args.language)
 
+    def start_cloudflare_tunnel(port=7860):
+        """
+        Lance un tunnel Cloudflare gratuit en arrière-plan comme secours garanti
+        si les serveurs publics Gradio (gradio.live) sont hors-ligne.
+        """
+        import platform
+        import shutil
+        import subprocess
+        import threading
+        import time
+        import re
+        import os
+
+        if platform.system().lower() != "linux":
+            return
+
+        def _tunnel_worker():
+            cf_bin = shutil.which("cloudflared")
+            if not cf_bin:
+                cf_path = "/tmp/cloudflared"
+                if not os.path.exists(cf_path):
+                    try:
+                        import urllib.request
+                        url = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+                        urllib.request.urlretrieve(url, cf_path)
+                        os.chmod(cf_path, 0o755)
+                        cf_bin = cf_path
+                    except Exception as e_dl:
+                        logger.warning(f"Impossible de télécharger cloudflared : {e_dl}")
+                        return
+                else:
+                    cf_bin = cf_path
+
+            log_file = "/tmp/cloudflared_tunnel.log"
+            with open(log_file, "w") as f_out:
+                proc = subprocess.Popen(
+                    [cf_bin, "tunnel", "--url", f"http://127.0.0.1:{port}"],
+                    stdout=f_out,
+                    stderr=subprocess.STDOUT
+                )
+
+            for _ in range(25):
+                time.sleep(1)
+                if os.path.exists(log_file):
+                    with open(log_file, "r") as f_in:
+                        content = f_in.read()
+                        m = re.findall(r'https://[a-zA-Z0-9-]+\.trycloudflare\.com', content)
+                        if m:
+                            cf_url = m[-1]
+                            print("\n" + "=" * 65)
+                            print("🚀 LIEN PUBLIC SECOURS CLOUDFLARE (Actif même si Gradio est en panne) :")
+                            print(f"👉 {cf_url}")
+                            print("=" * 65 + "\n", flush=True)
+                            break
+
+        t = threading.Thread(target=_tunnel_worker, daemon=True)
+        t.start()
+
+    if getattr(args, "public_url", False):
+        try:
+            start_cloudflare_tunnel(port=7860)
+        except Exception as e_cf:
+            logger.warning(f"Erreur initialisation tunnel Cloudflare : {e_cf}")
+
     app = create_gui(args.theme, logs_in_gui=args.logs_in_gui)
     app.queue()
 
