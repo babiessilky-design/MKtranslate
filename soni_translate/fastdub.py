@@ -67,12 +67,16 @@ VALID_FISH_TAGS = {"excited", "laughing", "whisper", "angry", "surprised", "sad"
 def normalize_emotion_for_fish(raw_tag):
     """Convertit une étiquette d'émotion en balise native Fish Audio."""
     if not raw_tag:
-        return "[calm]"
+        return ""
     tag_clean = raw_tag.lower().strip("[] \t\r\n")
+    if not tag_clean:
+        return ""
     if tag_clean in VALID_FISH_TAGS:
         return f"[{tag_clean}]"
-    mapped = FISH_EMOTIONS_MAP.get(tag_clean, "calm")
-    return f"[{mapped}]"
+    mapped = FISH_EMOTIONS_MAP.get(tag_clean, "")
+    if mapped:
+        return f"[{mapped}]"
+    return ""
 
 
 def get_fastdub_voices():
@@ -825,7 +829,10 @@ def parse_dubbing_script(script_text):
     00:00:00,249 --> 00:00:01,171
     Speaker 1: [admiratif] Waouh, t'es magnifique.
     """
-    blocks = re.split(r'\n\s*\n', script_text.strip())
+    clean_text = script_text.replace('\r\n', '\n').strip()
+    # Normalisation : force un double saut de ligne avant chaque numéro suivi de timestamp
+    normalized = re.sub(r'(\n|^)\s*(\d+)\s*\n\s*(\d{1,2}:\d{2}:\d{2})', r'\n\n\2\n\3', clean_text).strip()
+    blocks = re.split(r'\n\s*\n', normalized)
     parsed_dialogues = []
 
     time_pattern = re.compile(r'(\d{1,2}:\d{2}:\d{2}[,\.]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,\.]\d{1,3})')
@@ -856,7 +863,9 @@ def parse_dubbing_script(script_text):
             end_sec = start_sec + 1.0
 
         # Le texte de la réplique se trouve après la ligne de temps
-        text_lines = [l.strip() for l in lines[time_line_idx + 1:] if l.strip()]
+        # Filtre absolu : élimine toute ligne de timestamp ou de numéro résiduel
+        raw_text_lines = [l.strip() for l in lines[time_line_idx + 1:] if l.strip()]
+        text_lines = [tl for tl in raw_text_lines if not (time_pattern.search(tl) or tl.isdigit())]
         if not text_lines:
             continue
 
@@ -881,7 +890,7 @@ def parse_dubbing_script(script_text):
                 cue_end = cue_start + 0.4
 
             speaker_id = 1
-            emotion_tag = "[calm]"
+            emotion_tag = ""  # Pas d'émotion forcée par défaut
             speech_text = c_text
 
             spk_match = speaker_pattern.match(c_text)
@@ -896,12 +905,17 @@ def parse_dubbing_script(script_text):
 
             emo_match = emotion_pattern.match(speech_text)
             if emo_match:
-                raw_emo = emo_match.group(1)
+                raw_emo = emo_match.group(1).strip()
                 emotion_tag = normalize_emotion_for_fish(raw_emo)
                 speech_text = emo_match.group(2).strip()
 
             # Nettoyage ultime du texte pour le TTS
             speech_text = re.sub(r'^(?:Speaker\s*\d+|Homme|Femme)\s*:\s*', '', speech_text, flags=re.IGNORECASE).strip()
+            # Supprime tout timestamp égaré ou numéro de cue terminal
+            speech_text = time_pattern.sub('', speech_text).strip()
+            speech_text = re.sub(r'\b\d+\s*$', '', speech_text).strip()
+
+            full_tts = f"{emotion_tag} {speech_text}".strip() if emotion_tag else speech_text
 
             parsed_dialogues.append({
                 "start": round(cue_start, 3),
@@ -910,10 +924,9 @@ def parse_dubbing_script(script_text):
                 "speaker": speaker_id,
                 "emotion": emotion_tag,
                 "text": speech_text,
-                "full_tts_text": f"{emotion_tag} {speech_text}".strip()
+                "full_tts_text": full_tts
             })
             cue_start = cue_end
-
 
     return parsed_dialogues
 
@@ -985,7 +998,8 @@ def render_fastdub_video(
     total_diag = len(dialogues)
     for idx, diag in enumerate(dialogues):
         if progress:
-            progress(0.1 + (0.75 * (idx / max(total_diag, 1))), desc=f"Synthèse réplique {idx+1}/{total_diag} ({diag['emotion']})...")
+            emo_info = f" ({diag['emotion']})" if diag.get("emotion") else ""
+            progress(0.1 + (0.75 * (idx / max(total_diag, 1))), desc=f"Synthèse réplique {idx+1}/{total_diag}{emo_info}...")
 
         voice_chosen = speaker2_voice if diag["speaker"] == 2 else speaker1_voice
         tts_text = diag["full_tts_text"]
