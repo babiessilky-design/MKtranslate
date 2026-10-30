@@ -2991,11 +2991,15 @@ def create_gui(theme, logs_in_gui=False):
                 translated = translate_dubbing_script(fr_script, target_lang=target_lang, model_name=model_name)
                 return translated
 
-            def run_fastdub_render(media_path, script_text, spk1_voice, spk2_voice, tts_engine, target_lang, bg_vol, progress=gr.Progress()):
+            def run_fastdub_render(media_path, script_text, fr_script_text, spk1_voice, spk2_voice, tts_engine, target_lang, bg_vol, progress=gr.Progress()):
                 if not media_path:
                     raise gr.Error("Fichier vidéo ou audio source manquant.")
-                if not script_text or not script_text.strip():
-                    raise gr.Error("Le script de doublage final (boîte 3) est vide. Validez ou traduisez votre script avant de lancer le rendu.")
+                active_script = (script_text or "").strip()
+                if not active_script:
+                    active_script = (fr_script_text or "").strip()
+                if not active_script:
+                    raise gr.Error("Le script de doublage est vide. Veuillez coller votre script dans la boîte 2 ou la boîte 3 avant de lancer le rendu.")
+                script_text = active_script
                 if isinstance(media_path, list):
                     media_path = media_path[0]
                 vpath = media_path if isinstance(media_path, str) else getattr(media_path, "name", str(media_path))
@@ -3036,6 +3040,7 @@ def create_gui(theme, logs_in_gui=False):
                 inputs=[
                     fastdub_media_input,
                     fastdub_final_script_box,
+                    fastdub_fr_script_box,
                     fastdub_spk1_voice,
                     fastdub_spk2_voice,
                     fastdub_tts_engine,
