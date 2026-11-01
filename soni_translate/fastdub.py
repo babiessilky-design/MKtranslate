@@ -824,76 +824,81 @@ Ta mission : traduire et adapter localement ce script de doublage français pour
 # ==============================================================================
 def parse_dubbing_script(script_text):
     """
-    Parse le script de doublage formaté :
-    1
-    00:00:00,249 --> 00:00:01,171
-    Speaker 1: [admiratif] Waouh, t'es magnifique.
+    Parseur universel centré sur l'horodatage :
+    Tant qu'un horodatage est présent (format -->, ->, avec , ou .), la réplique
+    est extraite et doublée, peu importe la numérotation, les sauts de lignes
+    ou le formatage markdown généré par une IA externe (Google AI Studio, etc.).
     """
-    clean_text = script_text.replace('\r\n', '\n').strip()
-    # Normalisation : force un double saut de ligne avant chaque numéro suivi de timestamp
-    normalized = re.sub(r'(\n|^)\s*(\d+)\s*\n\s*(\d{1,2}:\d{2}:\d{2})', r'\n\n\2\n\3', clean_text).strip()
-    blocks = re.split(r'\n\s*\n', normalized)
+    if not script_text or not script_text.strip():
+        return []
+
+    clean_text = script_text.replace('\r\n', '\n')
+
+    # Détection universelle de tous les horodatages (--> , ->, —>, etc.)
+    ts_regex = re.compile(
+        r'(?P<start>(?:\d{1,2}:)?\d{1,2}:\d{2}[,\.]\d{1,3})\s*(?:-->|->|—>|–>)\s*(?P<end>(?:\d{1,2}:)?\d{1,2}:\d{2}[,\.]\d{1,3})'
+    )
+    speaker_regex = re.compile(
+        r'^(?:[\*\s#_]*(?:Speaker\s*(\d+)|(Homme|Femme)|SPEAKER_(\d+))[\*\s_]*[:\-–]\s*[\*\s_]*)(.*)$',
+        re.IGNORECASE
+    )
+    emotion_regex = re.compile(r'^\[([^\]]+)\]\s*(.*)$')
+
+    matches = list(ts_regex.finditer(clean_text))
+    if not matches:
+        logger.warning("FastDub : Aucun horodatage valide trouvé dans le script.")
+        return []
+
     parsed_dialogues = []
 
-    time_pattern = re.compile(r'(\d{1,2}:\d{2}:\d{2}[,\.]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,\.]\d{1,3})')
-    speaker_pattern = re.compile(r'^(?:Speaker\s*(\d+)|(Homme|Femme)|SPEAKER_(\d+))\s*:\s*(.*)$', re.IGNORECASE)
-    emotion_pattern = re.compile(r'^\[([^\]]+)\]\s*(.*)$')
-
-    for blk in blocks:
-        lines = [line.strip() for line in blk.strip().split('\n') if line.strip()]
-        if len(lines) < 2:
-            continue
-
-        # Recherche de la ligne de temps
-        time_match = None
-        time_line_idx = -1
-        for idx, l in enumerate(lines):
-            m = time_pattern.search(l)
-            if m:
-                time_match = m
-                time_line_idx = idx
-                break
-
-        if not time_match or time_line_idx == -1:
-            continue
-
-        start_sec = srt_time_to_seconds(time_match.group(1))
-        end_sec = srt_time_to_seconds(time_match.group(2))
+    for idx, m in enumerate(matches):
+        start_sec = srt_time_to_seconds(m.group('start'))
+        end_sec = srt_time_to_seconds(m.group('end'))
         if end_sec <= start_sec:
-            end_sec = start_sec + 1.0
+            end_sec = start_sec + 0.5
 
-        # Le texte de la réplique se trouve après la ligne de temps
-        # Filtre absolu : élimine toute ligne de timestamp ou de numéro résiduel
-        raw_text_lines = [l.strip() for l in lines[time_line_idx + 1:] if l.strip()]
-        text_lines = [tl for tl in raw_text_lines if not (time_pattern.search(tl) or tl.isdigit())]
-        if not text_lines:
+        # Le texte de la réplique s'étend de la fin de l'horodatage actuel jusqu'au début de l'horodatage suivant
+        text_start = m.end()
+        text_end = matches[idx + 1].start() if idx + 1 < len(matches) else len(clean_text)
+        chunk = clean_text[text_start:text_end].strip()
+
+        # Nettoyage des lignes et suppression du numéro de réplique qui précède l'horodatage suivant (ex: '2', '### 3', '4.')
+        raw_lines = [l.strip() for l in chunk.split('\n') if l.strip()]
+        cleaned_lines = []
+        for l in raw_lines:
+            if re.match(r'^(?:#{1,4}\s*)?\d+[\.\)]?$', l):
+                continue
+            cleaned_lines.append(l)
+
+        if not cleaned_lines:
             continue
 
-        cues = []
-        for tl in text_lines:
-            if speaker_pattern.match(tl):
-                cues.append(tl)
-            elif cues:
-                cues[-1] += " " + tl
+        # Découpage si plusieurs locuteurs parlent au cours de ce même intervalle temporel
+        sub_cues = []
+        for l in cleaned_lines:
+            if speaker_regex.match(l):
+                sub_cues.append(l)
+            elif sub_cues:
+                sub_cues[-1] += " " + l
             else:
-                cues.append(tl)
+                sub_cues.append(l)
 
-        total_cue_weight = sum(max(len(c.split()), 1) for c in cues)
+        total_weight = sum(max(len(c.split()), 1) for c in sub_cues)
         cue_start = start_sec
         block_dur = max(end_sec - start_sec, 0.4)
 
-        for c_text in cues:
+        for c_text in sub_cues:
             weight = max(len(c_text.split()), 1)
-            dur = (weight / max(total_cue_weight, 1)) * block_dur
+            dur = (weight / max(total_weight, 1)) * block_dur
             cue_end = min(end_sec, cue_start + dur)
             if cue_end <= cue_start:
                 cue_end = cue_start + 0.4
 
             speaker_id = 1
-            emotion_tag = ""  # Pas d'émotion forcée par défaut
+            emotion_tag = ""
             speech_text = c_text
 
-            spk_match = speaker_pattern.match(c_text)
+            spk_match = speaker_regex.match(c_text)
             if spk_match:
                 if spk_match.group(1):
                     speaker_id = int(spk_match.group(1))
@@ -903,17 +908,20 @@ def parse_dubbing_script(script_text):
                     speaker_id = int(spk_match.group(3)) + 1
                 speech_text = spk_match.group(4).strip()
 
-            emo_match = emotion_pattern.match(speech_text)
+            emo_match = emotion_regex.match(speech_text)
             if emo_match:
                 raw_emo = emo_match.group(1).strip()
                 emotion_tag = normalize_emotion_for_fish(raw_emo)
                 speech_text = emo_match.group(2).strip()
 
-            # Nettoyage ultime du texte pour le TTS
-            speech_text = re.sub(r'^(?:Speaker\s*\d+|Homme|Femme)\s*:\s*', '', speech_text, flags=re.IGNORECASE).strip()
-            # Supprime tout timestamp égaré ou numéro de cue terminal
-            speech_text = time_pattern.sub('', speech_text).strip()
+            # Nettoyage méticuleux des balises, astérisques markdown et résidus
+            speech_text = re.sub(r'^(?:[\*\s#_]*(?:Speaker\s*\d+|Homme|Femme)[\*\s_]*[:\-–]\s*[\*\s_]*)', '', speech_text, flags=re.IGNORECASE).strip()
+            speech_text = speech_text.strip('"\'*')
+            speech_text = ts_regex.sub('', speech_text).strip()
             speech_text = re.sub(r'\b\d+\s*$', '', speech_text).strip()
+
+            if not speech_text:
+                continue
 
             full_tts = f"{emotion_tag} {speech_text}".strip() if emotion_tag else speech_text
 
