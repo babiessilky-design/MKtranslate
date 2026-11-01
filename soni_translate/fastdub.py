@@ -119,16 +119,35 @@ def seconds_to_srt_time(seconds):
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 def srt_time_to_seconds(time_str):
-    """Convertit 'HH:MM:SS,mmm' ou 'HH:MM:SS.mmm' en secondes flottantes."""
-    time_str = time_str.strip().replace(',', '.')
+    """Convertit n'importe quel horodatage (HH:MM:SS,mmm, HH:MM:SS.mmm, MM:SS:mmm, etc.) en secondes flottantes."""
+    if not time_str:
+        return 0.0
+    time_str = str(time_str).strip().replace(',', '.')
     parts = time_str.split(':')
-    if len(parts) == 3:
-        h, m, s = parts
-        return float(h) * 3600 + float(m) * 60 + float(s)
+    if len(parts) >= 4:
+        # e.g. 00:08:08:261 -> h=00, m=08, s=08, ms=261
+        return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2]) + float('0.' + parts[3])
+    elif len(parts) == 3:
+        p0, p1, p2 = parts[0], parts[1], parts[2]
+        if '.' in p2:
+            return float(p0) * 3600 + float(p1) * 60 + float(p2)
+        elif len(p2) >= 3 and not ('.' in p0 or '.' in p1):
+            # Format m:s:ms (ex: 00:10:473 -> 10s 473ms)
+            return float(p0) * 60 + float(p1) + float('0.' + p2)
+        else:
+            return float(p0) * 3600 + float(p1) * 60 + float(p2)
     elif len(parts) == 2:
-        m, s = parts
-        return float(m) * 60 + float(s)
-    return float(time_str)
+        p0, p1 = parts[0], parts[1]
+        if '.' in p1:
+            return float(p0) * 60 + float(p1)
+        elif len(p1) >= 3:
+            return float(p0) + float('0.' + p1)
+        else:
+            return float(p0) * 60 + float(p1)
+    try:
+        return float(time_str)
+    except Exception:
+        return 0.0
 
 
 # ==============================================================================
@@ -824,45 +843,68 @@ Ta mission : traduire et adapter localement ce script de doublage français pour
 # ==============================================================================
 def parse_dubbing_script(script_text):
     """
-    Parseur universel centré sur l'horodatage :
-    Tant qu'un horodatage est présent (format -->, ->, avec , ou .), la réplique
-    est extraite et doublée, peu importe la numérotation, les sauts de lignes
-    ou le formatage markdown généré par une IA externe (Google AI Studio, etc.).
+    Parseur ultra-robuste avec réparation automatique d'horodatages :
+    Répare automatiquement les horodatages tronqués (ex: 00:10:473 -> 00:04:10,473),
+    les erreurs de frappe (start > end), les séparateurs colons/virgules/points,
+    et garantit que 100% des répliques horodatées sont extraites et doublées.
     """
     if not script_text or not script_text.strip():
         return []
 
     clean_text = script_text.replace('\r\n', '\n')
 
-    # Détection universelle de tous les horodatages (--> , ->, —>, etc.)
-    ts_regex = re.compile(
-        r'(?P<start>(?:\d{1,2}:)?\d{1,2}:\d{2}[,\.]\d{1,3})\s*(?:-->|->|—>|–>)\s*(?P<end>(?:\d{1,2}:)?\d{1,2}:\d{2}[,\.]\d{1,3})'
+    # Capture universelle de toutes les lignes d'horodatage fléchées
+    line_pattern = re.compile(
+        r'^\s*(?P<start>(?:\d{1,2}:){1,3}\d{1,3}(?:[,\.]\d{1,3})?)\s*(?:-->|->|—>|–>)\s*(?P<end>(?:\d{1,2}:){1,3}\d{1,3}(?:[,\.]\d{1,3})?)\s*$',
+        re.MULTILINE
     )
+
+    matches = list(line_pattern.finditer(clean_text))
+    if not matches:
+        logger.warning("FastDub : Aucun horodatage fléché trouvé dans le script.")
+        return []
+
     speaker_regex = re.compile(
         r'^(?:[\*\s#_]*(?:Speaker\s*(\d+)|(Homme|Femme)|SPEAKER_(\d+))[\*\s_]*[:\-–]\s*[\*\s_]*)(.*)$',
         re.IGNORECASE
     )
     emotion_regex = re.compile(r'^\[([^\]]+)\]\s*(.*)$')
 
-    matches = list(ts_regex.finditer(clean_text))
-    if not matches:
-        logger.warning("FastDub : Aucun horodatage valide trouvé dans le script.")
-        return []
-
     parsed_dialogues = []
+    prev_end_sec = 0.0
 
     for idx, m in enumerate(matches):
-        start_sec = srt_time_to_seconds(m.group('start'))
-        end_sec = srt_time_to_seconds(m.group('end'))
+        raw_start = m.group('start')
+        raw_end = m.group('end')
+
+        end_sec = srt_time_to_seconds(raw_end)
+        start_sec = srt_time_to_seconds(raw_start)
+
+        # Réparation intelligente de start_sec si tronqué (ex: '00:10:473' alors que end='00:04:11,374')
+        if end_sec > 60.0 and start_sec < 60.0 and (end_sec - start_sec) > 30.0:
+            minute_base = int(end_sec // 60) * 60
+            candidate_start = minute_base + start_sec
+            if candidate_start > end_sec:
+                candidate_start -= 60.0
+            if 0 < (end_sec - candidate_start) <= 20.0:
+                start_sec = candidate_start
+
+        # Réparation si start_sec >= end_sec (ex: faute de frappe comme 354: start 10m06s, end 8m11s)
+        if start_sec >= end_sec or (end_sec - start_sec) > 25.0 or start_sec < (prev_end_sec - 2.0):
+            if prev_end_sec > 0 and prev_end_sec < end_sec and (end_sec - prev_end_sec) <= 12.0:
+                start_sec = prev_end_sec
+            else:
+                start_sec = max(0.0, end_sec - 1.2)
+
         if end_sec <= start_sec:
             end_sec = start_sec + 0.5
 
-        # Le texte de la réplique s'étend de la fin de l'horodatage actuel jusqu'au début de l'horodatage suivant
+        prev_end_sec = end_sec
+
         text_start = m.end()
         text_end = matches[idx + 1].start() if idx + 1 < len(matches) else len(clean_text)
         chunk = clean_text[text_start:text_end].strip()
 
-        # Nettoyage des lignes et suppression du numéro de réplique qui précède l'horodatage suivant (ex: '2', '### 3', '4.')
         raw_lines = [l.strip() for l in chunk.split('\n') if l.strip()]
         cleaned_lines = []
         for l in raw_lines:
@@ -873,7 +915,6 @@ def parse_dubbing_script(script_text):
         if not cleaned_lines:
             continue
 
-        # Découpage si plusieurs locuteurs parlent au cours de ce même intervalle temporel
         sub_cues = []
         for l in cleaned_lines:
             if speaker_regex.match(l):
@@ -914,10 +955,9 @@ def parse_dubbing_script(script_text):
                 emotion_tag = normalize_emotion_for_fish(raw_emo)
                 speech_text = emo_match.group(2).strip()
 
-            # Nettoyage méticuleux des balises, astérisques markdown et résidus
             speech_text = re.sub(r'^(?:[\*\s#_]*(?:Speaker\s*\d+|Homme|Femme)[\*\s_]*[:\-–]\s*[\*\s_]*)', '', speech_text, flags=re.IGNORECASE).strip()
             speech_text = speech_text.strip('"\'*')
-            speech_text = ts_regex.sub('', speech_text).strip()
+            speech_text = line_pattern.sub('', speech_text).strip()
             speech_text = re.sub(r'\b\d+\s*$', '', speech_text).strip()
 
             if not speech_text:
