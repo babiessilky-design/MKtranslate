@@ -989,6 +989,9 @@ def render_fastdub_video(
     except Exception:
         total_media_duration = max([d["end"] for d in dialogues]) + 2.0
 
+    max_diag_end = max([d["end"] for d in dialogues]) + 2.0 if dialogues else 0.0
+    total_media_duration = max(total_media_duration, max_diag_end)
+
     target_sr = 44100
     total_samples = int(np.ceil(total_media_duration * target_sr))
     master_audio = np.zeros(total_samples, dtype=np.float32)
@@ -1013,16 +1016,23 @@ def render_fastdub_video(
         tts_text = diag["full_tts_text"]
         out_chunk_path = os.path.join(chunks_dir, f"chunk_{idx:04d}.wav")
 
+        generated_ok = False
         try:
             if tts_engine == "fish_audio" and fish_provider:
-                fish_provider.generate(
-                    text=tts_text,
-                    voice=voice_chosen,
-                    target_lang=clean_target_lang,
-                    output_file=out_chunk_path
-                )
-            else:
-                # Secours Edge-TTS multilingue
+                try:
+                    fish_provider.generate(
+                        text=tts_text,
+                        voice=voice_chosen,
+                        target_lang=clean_target_lang,
+                        output_file=out_chunk_path
+                    )
+                    if os.path.exists(out_chunk_path) and os.path.getsize(out_chunk_path) > 1000:
+                        generated_ok = True
+                except Exception as e_fish:
+                    logger.warning(f"FastDub : Fish Audio en échec sur réplique {idx+1} ({e_fish}). Basculement sur Edge-TTS...")
+
+            if not generated_ok:
+                # Secours automatique Edge-TTS si Fish Audio indisponible ou a échoué
                 import edge_tts
                 import asyncio
                 clean_raw_text = diag["text"]
@@ -1040,7 +1050,6 @@ def render_fastdub_video(
                 m_v, f_v = edge_voices_by_lang.get(clean_target_lang, ("fr-FR-HenriNeural", "fr-FR-DeniseNeural"))
                 edge_v = f_v if diag["speaker"] == 2 else m_v
                 asyncio.run(edge_tts.Communicate(clean_raw_text, edge_v).save(out_chunk_path))
-
 
             # Lecture de l'audio généré
             if os.path.exists(out_chunk_path) and os.path.getsize(out_chunk_path) > 1000:
@@ -1079,6 +1088,13 @@ def render_fastdub_video(
 
         except Exception as e_tts:
             logger.error(f"Erreur synthèse FastDub réplique {idx+1}: {e_tts}")
+        finally:
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
 
     # Normalisation de la piste voix
     max_amp = float(np.abs(master_audio).max())

@@ -450,6 +450,12 @@ class FishAudioProvider(BaseTTSProvider):
         except Exception as e_local:
             import traceback
             self.logger.error(f"Fish Audio Local FP16 Generation Error: {str(e_local)}\n{traceback.format_exc()}")
+        finally:
+            if torch.cuda.is_available():
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
 
 
         # 4. Filet de sécurité anti-crash (silence propre)
