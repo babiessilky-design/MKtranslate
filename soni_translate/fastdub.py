@@ -841,6 +841,82 @@ Ta mission : traduire et adapter localement ce script de doublage français pour
 # ==============================================================================
 # 3. PARSEUR DE SCRIPT DE DOUBLAGE FASTDUB
 # ==============================================================================
+def clean_script_to_pure_srt(script_text):
+    """
+    Convertit un script de doublage (avec Speaker 1/2 et balises [émotion])
+    en sous-titres SRT purs et professionnels prêts à être importés sur YouTube Studio :
+    Uniquement Numérotation + Horodatages + Texte du dialogue propre (sans tags ni balises).
+    """
+    if not script_text or not script_text.strip():
+        return ""
+
+    line_pattern = re.compile(
+        r'^\s*(?P<start>(?:\d{1,2}:){1,3}\d{1,3}(?:[,\.]\d{1,3})?)\s*(?:-->|->|—>|–>)\s*(?P<end>(?:\d{1,2}:){1,3}\d{1,3}(?:[,\.]\d{1,3})?)\s*$',
+        re.MULTILINE
+    )
+
+    clean_text = script_text.replace('\r\n', '\n')
+    matches = list(line_pattern.finditer(clean_text))
+    if not matches:
+        return ""
+
+    speaker_regex = re.compile(
+        r'^(?:[\*\s#_]*(?:Speaker\s*(\d+)|(Homme|Femme)|SPEAKER_(\d+))[\*\s_]*[:\-–]\s*[\*\s_]*)(.*)$',
+        re.IGNORECASE
+    )
+    emotion_regex = re.compile(r'\[[^\]]+\]\s*')
+
+    srt_blocks = []
+    cue_counter = 1
+
+    for idx, m in enumerate(matches):
+        raw_start = m.group('start').strip().replace('.', ',')
+        raw_end = m.group('end').strip().replace('.', ',')
+
+        def normalize_ts(ts):
+            ts = ts.replace(';', ':')
+            parts = ts.split(':')
+            if len(parts) == 4:
+                return f"{parts[0]:0>2}:{parts[1]:0>2}:{parts[2]:0>2},{parts[3]:0<3}"
+            elif len(parts) == 2:
+                return f"00:{parts[0]:0>2}:{parts[1]}"
+            elif len(parts) == 3:
+                return f"{parts[0]:0>2}:{parts[1]:0>2}:{parts[2]}"
+            return ts
+
+        start_str = normalize_ts(raw_start)
+        end_str = normalize_ts(raw_end)
+
+        text_start = m.end()
+        text_end = matches[idx + 1].start() if idx + 1 < len(matches) else len(clean_text)
+        chunk = clean_text[text_start:text_end].strip()
+
+        raw_lines = [l.strip() for l in chunk.split('\n') if l.strip()]
+        dialogue_lines = []
+        for l in raw_lines:
+            if re.match(r'^(?:#{1,4}\s*)?\d+[\.\)]?$', l):
+                continue
+            spk_m = speaker_regex.match(l)
+            if spk_m:
+                line_content = spk_m.group(4).strip()
+            else:
+                line_content = re.sub(r'^(?:[\*\s#_]*(?:Speaker\s*\d+|Homme|Femme)[\*\s_]*[:\-–]\s*[\*\s_]*)', '', l, flags=re.IGNORECASE).strip()
+
+            line_content = emotion_regex.sub('', line_content).strip()
+            line_content = line_content.strip('"\'*')
+            if line_content:
+                dialogue_lines.append(line_content)
+
+        if not dialogue_lines:
+            continue
+
+        clean_dialogue = ' '.join(dialogue_lines).strip()
+        srt_blocks.append(f"{cue_counter}\n{start_str} --> {end_str}\n{clean_dialogue}\n")
+        cue_counter += 1
+
+    return '\n'.join(srt_blocks).strip()
+
+
 def parse_dubbing_script(script_text):
     """
     Parseur ultra-robuste avec réparation automatique d'horodatages :

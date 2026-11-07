@@ -2921,13 +2921,25 @@ def create_gui(theme, logs_in_gui=False):
                         btn_fastdub_translate_target = gr.Button("🌍 3. Valider / Traduire ➡️", variant="secondary")
 
                 with gr.Column(scale=1):
-                    gr.Markdown("#### 🌐 3. Script Final pour le Rendu (Éditable & TTS)")
+                    gr.Markdown("#### 🌐 3. Script Doublage Final (TTS)")
                     fastdub_final_script_box = gr.Textbox(
-                        label="Script final pour la synthèse vocale (Français ou traduit)",
-                        placeholder="Le script final pour la synthèse vocale s'affichera ici. Si Français : copie directe sans recalcul. Si autre langue : adaptation locale automatique.",
+                        label="Script doublage avec voix & émotions (Speaker 1/2)",
+                        placeholder="Le script final pour la synthèse vocale s'affichera ici (avec Speaker 1/2 et balises d'émotion).",
                         lines=14,
                         max_lines=25
                     )
+
+                with gr.Column(scale=1):
+                    gr.Markdown("#### 📄 4. Sous-titres YouTube (SRT Propre)")
+                    fastdub_clean_srt_box = gr.Textbox(
+                        label="SRT officiel pour YouTube (Numérotation + Horodatage + Texte pur)",
+                        placeholder="1\n00:00:00,249 --> 00:00:01,171\nWaouh, t'es magnifique.\n\n2\n00:00:01,732 --> 00:00:02,394\nQu'est-ce que tu me veux ?",
+                        lines=14,
+                        max_lines=25
+                    )
+                    with gr.Row():
+                        btn_fastdub_clean_srt = gr.Button("🪄 4. Extraire SRT Propre ➡️", variant="secondary")
+                        file_fastdub_clean_srt = gr.File(label="Télécharger le fichier .SRT", visible=False)
 
             gr.HTML("<hr style='margin: 15px 0;'>")
 
@@ -2953,6 +2965,7 @@ def create_gui(theme, logs_in_gui=False):
                 with gr.Column():
                     fastdub_video_output = gr.Video(label="Vidéo finale FastDub")
                     fastdub_audio_output = gr.Audio(label="Audio final FastDub (si source audio)", type="filepath")
+                    fastdub_srt_output = gr.File(label="Sous-titres YouTube (.srt officiel)", visible=False)
 
             # Connexion des callbacks FastDub
             def run_fastdub_transcribe(media_path, asr_model, src_lang, progress=gr.Progress()):
@@ -2983,27 +2996,52 @@ def create_gui(theme, logs_in_gui=False):
                     return adapted_fr, adapted_fr
                 return adapted_fr, ""
 
+            def run_extract_clean_srt(final_script, fr_script, clean_box):
+                source = (final_script or "").strip()
+                if not source:
+                    source = (clean_box or "").strip()
+                if not source:
+                    source = (fr_script or "").strip()
+                if not source:
+                    raise gr.Error("Aucun texte à convertir. Collez ou générez un script d'abord.")
+                from soni_translate.fastdub import clean_script_to_pure_srt
+                cleaned_srt = clean_script_to_pure_srt(source)
+                out_dir = "outputs"
+                os.makedirs(out_dir, exist_ok=True)
+                srt_path = os.path.join(out_dir, "sous_titres_youtube.srt")
+                with open(srt_path, "w", encoding="utf-8") as f:
+                    f.write(cleaned_srt)
+                return cleaned_srt, gr.update(value=srt_path, visible=True)
+
             def run_fastdub_translate(fr_script, target_lang, model_name, progress=gr.Progress()):
                 if not fr_script or not fr_script.strip():
                     raise gr.Error("Le script français de référence est vide. Cliquez d'abord sur 'Adapter en Français' ou saisissez votre texte.")
-                from soni_translate.fastdub import translate_dubbing_script
+                from soni_translate.fastdub import translate_dubbing_script, clean_script_to_pure_srt
                 progress(0.3, desc=f"Traduction & adaptation locale vers {target_lang}...")
                 translated = translate_dubbing_script(fr_script, target_lang=target_lang, model_name=model_name)
-                return translated
+                cleaned_srt = clean_script_to_pure_srt(translated)
+                out_dir = "outputs"
+                os.makedirs(out_dir, exist_ok=True)
+                srt_path = os.path.join(out_dir, "sous_titres_youtube.srt")
+                with open(srt_path, "w", encoding="utf-8") as f:
+                    f.write(cleaned_srt)
+                return translated, cleaned_srt, gr.update(value=srt_path, visible=True)
 
-            def run_fastdub_render(media_path, script_text, fr_script_text, spk1_voice, spk2_voice, tts_engine, target_lang, bg_vol, progress=gr.Progress()):
+            def run_fastdub_render(media_path, script_text, fr_script_text, clean_script_text, spk1_voice, spk2_voice, tts_engine, target_lang, bg_vol, progress=gr.Progress()):
                 if not media_path:
                     raise gr.Error("Fichier vidéo ou audio source manquant.")
                 active_script = (script_text or "").strip()
                 if not active_script:
+                    active_script = (clean_script_text or "").strip()
+                if not active_script:
                     active_script = (fr_script_text or "").strip()
                 if not active_script:
-                    raise gr.Error("Le script de doublage est vide. Veuillez coller votre script dans la boîte 2 ou la boîte 3 avant de lancer le rendu.")
+                    raise gr.Error("Le script de doublage est vide. Veuillez coller votre script dans une des boîtes avant de lancer le rendu.")
                 script_text = active_script
                 if isinstance(media_path, list):
                     media_path = media_path[0]
                 vpath = media_path if isinstance(media_path, str) else getattr(media_path, "name", str(media_path))
-                from soni_translate.fastdub import render_fastdub_video
+                from soni_translate.fastdub import render_fastdub_video, clean_script_to_pure_srt
                 out_media = render_fastdub_video(
                     media_path=vpath,
                     script_text=script_text,
@@ -3015,7 +3053,16 @@ def create_gui(theme, logs_in_gui=False):
                     progress=progress
                 )
                 is_vid = str(out_media).lower().endswith((".mp4", ".mkv", ".mov", ".avi", ".webm"))
-                return (out_media if is_vid else None), (out_media if not is_vid else None), "🎉 **Doublage FastDub terminé avec succès !**"
+                
+                base_name = os.path.splitext(os.path.basename(vpath))[0]
+                clean_srt_content = clean_script_to_pure_srt(script_text)
+                out_dir = "outputs"
+                os.makedirs(out_dir, exist_ok=True)
+                final_srt_path = os.path.join(out_dir, f"{base_name}_youtube_subtitles.srt")
+                with open(final_srt_path, "w", encoding="utf-8") as f:
+                    f.write(clean_srt_content)
+
+                return (out_media if is_vid else None), (out_media if not is_vid else None), gr.update(value=final_srt_path, visible=True), "🎉 **Doublage FastDub terminé avec succès !**"
 
             btn_fastdub_transcribe.click(
                 fn=run_fastdub_transcribe,
@@ -3032,7 +3079,13 @@ def create_gui(theme, logs_in_gui=False):
             btn_fastdub_translate_target.click(
                 fn=run_fastdub_translate,
                 inputs=[fastdub_fr_script_box, fastdub_target_lang, fastdub_gemini_model],
-                outputs=[fastdub_final_script_box]
+                outputs=[fastdub_final_script_box, fastdub_clean_srt_box, file_fastdub_clean_srt]
+            )
+
+            btn_fastdub_clean_srt.click(
+                fn=run_extract_clean_srt,
+                inputs=[fastdub_final_script_box, fastdub_fr_script_box, fastdub_clean_srt_box],
+                outputs=[fastdub_clean_srt_box, file_fastdub_clean_srt]
             )
 
             btn_fastdub_render.click(
@@ -3041,13 +3094,14 @@ def create_gui(theme, logs_in_gui=False):
                     fastdub_media_input,
                     fastdub_final_script_box,
                     fastdub_fr_script_box,
+                    fastdub_clean_srt_box,
                     fastdub_spk1_voice,
                     fastdub_spk2_voice,
                     fastdub_tts_engine,
                     fastdub_target_lang,
                     fastdub_bg_volume
                 ],
-                outputs=[fastdub_video_output, fastdub_audio_output, fastdub_status_render]
+                outputs=[fastdub_video_output, fastdub_audio_output, fastdub_srt_output, fastdub_status_render]
             )
 
         with gr.Tab(lg_conf["tab_docs"]):
