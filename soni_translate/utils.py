@@ -5,7 +5,10 @@ except ImportError:
     rarfile = None
 from .logging_setup import logger
 from urllib.parse import urlparse
-from IPython.utils import capture
+try:
+    from IPython.utils import capture
+except ImportError:
+    capture = None
 import re
 import soundfile as sf
 import numpy as np
@@ -343,7 +346,7 @@ def load_file_from_url(
     progress: bool = True,
 ) -> str:
     """Download a file from `url` into `model_dir`,
-    using the file present if possible.
+    using the file present if possible. Supports multi-mirror fallback and retry.
 
     Returns the path to the downloaded file.
     """
@@ -353,17 +356,87 @@ def load_file_from_url(
         file_name = os.path.basename(parts.path)
     cached_file = os.path.abspath(os.path.join(model_dir, file_name))
 
-    # Overwrite
+    # Overwrite or remove corrupted 0-byte file
     if os.path.exists(cached_file):
         if overwrite or os.path.getsize(cached_file) == 0:
             remove_files(cached_file)
 
-    # Download
+    # Download if not present
     if not os.path.exists(cached_file):
-        logger.info(f'Downloading: "{url}" to {cached_file}\n')
-        from torch.hub import download_url_to_file
+        candidate_urls = [url]
+        fname = file_name or os.path.basename(urlparse(url).path)
+        if "all_public_uvr_models" in url or "UVR" in fname or "Reverb" in fname:
+            hf_url = f"https://huggingface.co/Blane187/all_public_uvr_models/resolve/main/{fname}"
+            gh_url = f"https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/{fname}"
+            # Hugging Face mirror first (ultra-reliable, avoids GitHub 504 timeouts)
+            candidate_urls = [hf_url, gh_url] if url != hf_url else [hf_url, gh_url]
 
-        download_url_to_file(url, cached_file, progress=progress)
+        download_success = False
+        last_error = None
+
+        for attempt_url in candidate_urls:
+            for retry in range(1, 4):
+                try:
+                    logger.info(f'Downloading: "{attempt_url}" to {cached_file} (tentative {retry}/3)...')
+                    
+                    # Try using torch.hub first if available
+                    use_torch_hub = False
+                    try:
+                        from torch.hub import download_url_to_file
+                        use_torch_hub = True
+                    except ImportError:
+                        use_torch_hub = False
+
+                    if use_torch_hub:
+                        try:
+                            download_url_to_file(attempt_url, cached_file, progress=progress)
+                            if os.path.exists(cached_file) and os.path.getsize(cached_file) > 0:
+                                download_success = True
+                                break
+                        except Exception as torch_err:
+                            logger.warning(f"torch.hub a échoué ({torch_err}), tentative via streaming HTTP standard...")
+                            if os.path.exists(cached_file):
+                                remove_files(cached_file)
+
+                    # Robust fallback via urllib streaming with custom User-Agent
+                    if not download_success:
+                        import urllib.request
+                        headers = {
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                        }
+                        req = urllib.request.Request(attempt_url, headers=headers)
+                        tmp_cached = cached_file + ".part"
+                        with urllib.request.urlopen(req, timeout=60) as resp, open(tmp_cached, "wb") as f_out:
+                            while True:
+                                chunk = resp.read(1024 * 512)
+                                if not chunk:
+                                    break
+                                f_out.write(chunk)
+                        if os.path.exists(tmp_cached) and os.path.getsize(tmp_cached) > 0:
+                            if os.path.exists(cached_file):
+                                remove_files(cached_file)
+                            os.rename(tmp_cached, cached_file)
+                            download_success = True
+                            break
+
+                except Exception as err:
+                    last_error = err
+                    logger.warning(f"Échec téléchargement {attempt_url}: {err}")
+                    tmp_part = cached_file + ".part"
+                    if os.path.exists(tmp_part):
+                        remove_files(tmp_part)
+                    if os.path.exists(cached_file):
+                        remove_files(cached_file)
+                    import time
+                    time.sleep(2)
+
+            if download_success:
+                break
+
+        if not download_success:
+            if last_error:
+                raise last_error
+            raise RuntimeError(f"Impossible de télécharger {file_name} depuis les miroirs disponibles.")
     else:
         logger.debug(cached_file)
 

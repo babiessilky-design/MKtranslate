@@ -431,7 +431,22 @@ def run_mdx(
     return main_filepath, invert_filepath
 
 
-MDX_DOWNLOAD_LINK = "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/"
+MDX_DOWNLOAD_LINK = "https://huggingface.co/Blane187/all_public_uvr_models/resolve/main/"
+MDX_DOWNLOAD_LINK_FALLBACK = "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/"
+
+def ensure_uvr_model(model_filename):
+    """Vérifie la présence du modèle UVR et le télécharge si manquant ou incomplet."""
+    m_path = os.path.join(mdxnet_models_dir, model_filename)
+    if not os.path.exists(m_path) or os.path.getsize(m_path) == 0:
+        logger.info(f"Téléchargement du modèle UVR requis : {model_filename}...")
+        try:
+            from soni_translate.utils import download_manager
+        except ImportError:
+            from utils import download_manager
+        download_manager(
+            os.path.join(MDX_DOWNLOAD_LINK, model_filename), mdxnet_models_dir
+        )
+    return m_path
 UVR_MODELS = [
     "UVR-MDX-NET-Voc_FT.onnx",
     "UVR_MDXNET_KARA_2.onnx",
@@ -498,10 +513,11 @@ def process_uvr_task(
 
     if only_voiceless:
         logger.info("Voiceless Track Separation...")
+        model_inst = ensure_uvr_model("UVR-MDX-NET-Inst_HQ_4.onnx")
         return run_mdx(
             mdx_model_params,
             song_output_dir,
-            os.path.join(mdxnet_models_dir, "UVR-MDX-NET-Inst_HQ_4.onnx"),
+            model_inst,
             orig_song_path,
             suffix="Voiceless",
             denoise=False,
@@ -511,10 +527,11 @@ def process_uvr_task(
         )
 
     logger.info("Vocal Track Isolation and Voiceless Track Separation...")
+    model_voc = ensure_uvr_model("UVR-MDX-NET-Voc_FT.onnx")
     vocals_path, instrumentals_path = run_mdx(
         mdx_model_params,
         song_output_dir,
-        os.path.join(mdxnet_models_dir, "UVR-MDX-NET-Voc_FT.onnx"),
+        model_voc,
         orig_song_path,
         denoise=True,
         keep_orig=True,
@@ -523,10 +540,11 @@ def process_uvr_task(
 
     if main_vocals:
         logger.info("Main Voice Separation from Supporting Vocals...")
+        model_kara = ensure_uvr_model("UVR_MDXNET_KARA_2.onnx")
         backup_vocals_path, main_vocals_path = run_mdx(
             mdx_model_params,
             song_output_dir,
-            os.path.join(mdxnet_models_dir, "UVR_MDXNET_KARA_2.onnx"),
+            model_kara,
             vocals_path,
             suffix="Backup",
             invert_suffix="Main",
@@ -538,10 +556,11 @@ def process_uvr_task(
 
     if dereverb:
         logger.info("Vocal Clarity Enhancement through De-Reverberation...")
+        model_rev = ensure_uvr_model("Reverb_HQ_By_FoxJoy.onnx")
         _, vocals_dereverb_path = run_mdx(
             mdx_model_params,
             song_output_dir,
-            os.path.join(mdxnet_models_dir, "Reverb_HQ_By_FoxJoy.onnx"),
+            model_rev,
             main_vocals_path,
             invert_suffix="DeReverb",
             exclude_main=True,

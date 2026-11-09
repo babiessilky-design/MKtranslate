@@ -3907,9 +3907,15 @@ if __name__ == "__main__":
     for id_model in UVR_MODELS:
         m_path = os.path.join(mdxnet_models_dir, id_model)
         if not os.path.exists(m_path) or os.path.getsize(m_path) == 0:
-            download_manager(
-                os.path.join(MDX_DOWNLOAD_LINK, id_model), mdxnet_models_dir
-            )
+            try:
+                download_manager(
+                    os.path.join(MDX_DOWNLOAD_LINK, id_model), mdxnet_models_dir
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Avertissement UVR: Impossible de pré-télécharger {id_model} au démarrage ({e}). "
+                    f"Le modèle sera téléchargé automatiquement à la demande lors de la séparation vocale."
+                )
 
     models_path, index_path = upload_model_list()
 
