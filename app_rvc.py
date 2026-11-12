@@ -1432,8 +1432,8 @@ class SoniTranslate(SoniTrCache):
                 "result": self.result,
                 "align_language": self.align_language
             }):
-                if self.align_language in ["ja", "zh", "zh-TW"]:
-                    divide_text_segments_by += "|!|?|...|。"
+                if self.align_language in ["ja", "zh", "zh-TW", "zh-CN", "zh-cn", "zh-tw"]:
+                    divide_text_segments_by += "|!|?|...|。|！|？|…|，|；|、"
                 elif not divide_text_segments_by and text_segmentation_scale == "sentence":
                     divide_text_segments_by = ".|!|?|...|…"
                 if text_segmentation_scale in ["word", "character"]:

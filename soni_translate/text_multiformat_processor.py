@@ -869,28 +869,28 @@ def break_aling_segments(
     # create new with filters
     normal = []
 
-    def process_chars(chars, letter_new_start, num, text, speaker="SPEAKER_00"):
+    def process_chars(chars, letter_new_start, num, text, speaker="SPEAKER_00", seg_start=0.0, seg_end=1.0):
         start_key, end_key = "start", "end"
         start_value = end_value = None
 
         for char in chars:
-            if start_key in char:
+            if start_key in char and char[start_key] is not None:
                 start_value = char[start_key]
                 break
 
         for char in reversed(chars):
-            if end_key in char:
+            if end_key in char and char[end_key] is not None:
                 end_value = char[end_key]
                 break
 
-        if not start_value or not end_value:
-            raise Exception(
-                f"Unable to obtain a valid timestamp for chars: {str(chars)}"
-            )
+        if start_value is None:
+            start_value = seg_start
+        if end_value is None:
+            end_value = seg_end
 
         return {
-            "start": start_value,
-            "end": end_value,
+            "start": round(float(start_value), 3),
+            "end": round(float(end_value), 3),
             "text": text,
             "words": chars,
             "speaker": speaker,
@@ -900,7 +900,21 @@ def break_aling_segments(
 
         logger.debug(f"- Process segment: {i}, text: {segment['text']}")
         seg_spk = segment.get("speaker", "SPEAKER_00")
-        # start = segment['start']
+        s_start = float(segment.get('start', 0.0))
+        s_end = float(segment.get('end', s_start + 1.0))
+        s_dur = max(0.1, s_end - s_start)
+
+        chars_list = segment.get('chars')
+        if not chars_list:
+            chars_list = []
+            s_text = str(segment.get('text', ''))
+            total_chars = max(len(s_text), 1)
+            for c_idx, c in enumerate(s_text):
+                c_start = s_start + (c_idx / total_chars) * s_dur
+                c_end = s_start + ((c_idx + 1) / total_chars) * s_dur
+                chars_list.append({"char": c, "start": c_start, "end": c_end})
+            segment['chars'] = chars_list
+
         letter_new_start = 0
         for num, char in enumerate(segment['chars']):
 
@@ -939,7 +953,7 @@ def break_aling_segments(
                     continue
 
                 # logger.debug(chars)
-                normal_dict = process_chars(chars, letter_new_start, num, text, speaker=seg_spk)
+                normal_dict = process_chars(chars, letter_new_start, num, text, speaker=seg_spk, seg_start=s_start, seg_end=s_end)
 
                 letter_new_start = num+1
 
@@ -966,7 +980,7 @@ def break_aling_segments(
 
                 chars = segment['chars'][letter_new_start:num+1]
 
-                normal_dict = process_chars(chars, letter_new_start, num, text, speaker=seg_spk)
+                normal_dict = process_chars(chars, letter_new_start, num, text, speaker=seg_spk, seg_start=s_start, seg_end=s_end)
 
                 letter_new_start = num+1
 

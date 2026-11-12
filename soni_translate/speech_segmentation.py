@@ -1069,6 +1069,20 @@ def transcribe_speech(
 
     audio = whisperx.load_audio(audio_wav)
 
+    # Détection automatique proactive de la langue pour appliquer le Master Prompt Chinois si besoin
+    if SOURCE_LANGUAGE is None:
+        try:
+            detect_slice = audio[:16000 * 30] if len(audio) > 16000 * 30 else audio
+            lang_detect = model.model.detect_language(detect_slice)
+            detected_lang = lang_detect[0] if isinstance(lang_detect, (list, tuple)) else getattr(lang_detect, "language", None)
+            if detected_lang in ["zh", "chinese"]:
+                logger.info("Détection automatique : Chinois Mandarin détecté. Application automatique du prompt de ponctuation et Chinois Simplifié...")
+                asr_options["initial_prompt"] = "以下是普通话的精彩对话，请加上完整的标点符号（，。！？），使用简体中文。"
+                if hasattr(model, "asr_options") and isinstance(model.asr_options, dict):
+                    model.asr_options["initial_prompt"] = asr_options["initial_prompt"]
+        except Exception as e_det:
+            logger.debug(f"Auto-detect language Mandarin check skipped: {e_det}")
+
     # Transcription résiliente contre les erreurs de mémoire par réduction dynamique du batch_size
     result = None
     cur_batch = batch_size
@@ -1091,9 +1105,10 @@ def transcribe_speech(
             else:
                 raise e_trans
 
-    if result["language"] == "zh" and not prompt:
-        result["language"] = "zh-TW"
-        logger.info("Chinese - Traditional (zh-TW)")
+    if result["language"] in ["zh", "zh-TW", "zh-CN"]:
+        if not SOURCE_LANGUAGE or SOURCE_LANGUAGE != "zh-TW":
+            result["language"] = "zh"
+            logger.info("Langue chinoise standard (zh - Chinois Simplifié)")
 
     del model
     gc.collect()
