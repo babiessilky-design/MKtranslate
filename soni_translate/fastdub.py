@@ -1156,7 +1156,12 @@ def render_fastdub_video(
             progress(0.1 + (0.75 * (idx / max(total_diag, 1))), desc=f"Synthèse réplique {idx+1}/{total_diag}{emo_info}...")
 
         voice_chosen = speaker2_voice if diag["speaker"] == 2 else speaker1_voice
-        tts_text = diag["full_tts_text"]
+        # Nettoyage total et garanti pour tous les moteurs TTS (Fish Audio et Edge-TTS)
+        clean_speech = re.sub(r'\[[^\]]+\]|\([^\)]+\)', '', str(diag.get("text", ""))).strip()
+        if not clean_speech:
+            clean_speech = str(diag.get("text", "")).strip()
+
+        tts_text = clean_speech
         out_chunk_path = os.path.join(chunks_dir, f"chunk_{idx:04d}.wav")
 
         generated_ok = False
