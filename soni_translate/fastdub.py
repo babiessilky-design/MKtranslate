@@ -275,28 +275,40 @@ def split_segment_into_dialogue_sentences(seg):
         if sub_segs:
             return sub_segs
 
-    # 2. CAS TEXTE BRUT : DÉCOUPAGE RÉGEX ET INTERPOLATION TEMPORELLE
-    sentences = [s.strip() for s in re.split(r'(?<=[.!?…])\s+', raw_text) if s.strip()]
+    # 2. CAS TEXTE BRUT : DÉCOUPAGE RÉGEX ET INTERPOLATION TEMPORELLE (AVEC SUPPORT CHINOIS / CJK)
+    is_cjk = bool(re.search(r'[一-鿿]', raw_text))
+    if is_cjk:
+        # Découpage sur ponctuation chinoise pleine chasse : 。！？…
+        sentences = [s.strip() for s in re.split(r'(?<=[。！？…])', raw_text) if s.strip()]
+        # Si aucune ponctuation forte et segment trop long (>= 4.0s), découper sur les virgules chinoises
+        if len(sentences) <= 1 and seg_dur >= 4.0:
+            sentences = [s.strip() for s in re.split(r'(?<=[，；])', raw_text) if s.strip()]
+    else:
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?…])\s+', raw_text) if s.strip()]
+
     if len(sentences) <= 1:
         return [seg]
 
     # Regrouper les micro-fragments accidentels avec la phrase voisine
     merged_sentences = []
     for s in sentences:
-        if merged_sentences and (len(s.split()) <= 2 or len(s) <= 4) and s[-1:] not in ['.', '!', '?']:
-            merged_sentences[-1] += " " + s
+        is_tiny = (len(s) <= 3) if is_cjk else (len(s.split()) <= 2 or len(s) <= 4)
+        has_end_punct = s[-1:] in ['.', '!', '?', '…', '。', '！', '？']
+        if merged_sentences and is_tiny and not has_end_punct:
+            separator = "" if is_cjk else " "
+            merged_sentences[-1] += separator + s
         else:
             merged_sentences.append(s)
 
     if len(merged_sentences) <= 1:
         return [seg]
 
-    total_weight = sum(max(len(s.split()), 1) for s in merged_sentences)
+    total_weight = sum(max(len(s), 1) if is_cjk else max(len(s.split()), 1) for s in merged_sentences)
     sub_segs = []
     cur_start = seg_start
 
     for s in merged_sentences:
-        weight = max(len(s.split()), 1)
+        weight = max(len(s), 1) if is_cjk else max(len(s.split()), 1)
         dur = (weight / total_weight) * seg_dur
         s_end = min(seg_end, cur_start + dur)
         if s_end <= cur_start:
@@ -336,7 +348,7 @@ def merge_only_broken_word_fragments(segments, max_gap=0.9):
             cur_words = cur_text.split()
             
             clean_last = re.sub(r'^[^\w]+|[^\w]+$', '', cur_words[-1] if cur_words else '').lower()
-            ends_punct = cur_text[-1:] in ['.', '!', '?', '…']
+            ends_punct = cur_text[-1:] in ['.', '!', '?', '…', '。', '！', '？', '，', '；']
             
             # Ne fusionne QUE si cur est manifestement un mot brisé/incomplet (sans ponctuation de fin)
             is_broken_fragment = False

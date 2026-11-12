@@ -2868,7 +2868,7 @@ def create_gui(theme, logs_in_gui=False):
                             label="Moteur de transcription (Whisper)"
                         )
                         fastdub_src_lang = gr.Dropdown(
-                            ["English (en)", "French (fr)", "Spanish (es)", "Auto"],
+                            ["English (en)", "French (fr)", "Spanish (es)", "Chinese (zh)", "Auto"],
                             value="English (en)",
                             label="Langue d'origine"
                         )
@@ -2976,9 +2976,11 @@ def create_gui(theme, logs_in_gui=False):
                 vpath = media_path if isinstance(media_path, str) else getattr(media_path, "name", str(media_path))
                 from soni_translate.fastdub import transcribe_media_to_srt
                 clean_lang = "en"
-                if "fr" in str(src_lang).lower(): clean_lang = "fr"
-                elif "es" in str(src_lang).lower(): clean_lang = "es"
-                elif "auto" in str(src_lang).lower(): clean_lang = "auto"
+                sl = str(src_lang).lower()
+                if "fr" in sl: clean_lang = "fr"
+                elif "es" in sl: clean_lang = "es"
+                elif "zh" in sl or "chin" in sl: clean_lang = "zh"
+                elif "auto" in sl: clean_lang = "auto"
                 
                 progress(0.1, desc="Extraction audio et transcription Whisper...")
                 srt_res = transcribe_media_to_srt(vpath, asr_model=asr_model, source_lang=clean_lang)

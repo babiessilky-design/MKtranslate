@@ -967,7 +967,7 @@ def transcribe_speech(
         return openai_api_whisper(audio_wav, SOURCE_LANGUAGE)
 
     # https://github.com/openai/whisper/discussions/277
-    prompt = "以下是普通话的句子。" if SOURCE_LANGUAGE == "zh" else None
+    prompt = "以下是普通话的精彩对话，请加上完整的标点符号（，。！？），使用简体中文。" if SOURCE_LANGUAGE in ["zh", "zh-CN", "chinese"] else None
     SOURCE_LANGUAGE = (
         SOURCE_LANGUAGE if SOURCE_LANGUAGE != "zh-TW" else "zh"
     )
