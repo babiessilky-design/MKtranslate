@@ -2948,8 +2948,8 @@ def create_gui(theme, logs_in_gui=False):
                     gr.Markdown("#### 🎙️ Attribution des voix & Réglages")
                     from soni_translate.fastdub import get_fastdub_voices
                     fastdub_voices_list = get_fastdub_voices()
-                    default_v1 = "ref_homme_fr" if "ref_homme_fr" in fastdub_voices_list else fastdub_voices_list[0]
-                    default_v2 = "ref_femme_fr" if "ref_femme_fr" in fastdub_voices_list else (fastdub_voices_list[1] if len(fastdub_voices_list) > 1 else fastdub_voices_list[0])
+                    default_v1 = "fr-FR-HenriNeural (Edge-TTS Homme)" if "fr-FR-HenriNeural (Edge-TTS Homme)" in fastdub_voices_list else ("ref_homme_fr" if "ref_homme_fr" in fastdub_voices_list else fastdub_voices_list[0])
+                    default_v2 = "fr-FR-DeniseNeural (Edge-TTS Femme)" if "fr-FR-DeniseNeural (Edge-TTS Femme)" in fastdub_voices_list else ("ref_femme_fr" if "ref_femme_fr" in fastdub_voices_list else (fastdub_voices_list[1] if len(fastdub_voices_list) > 1 else fastdub_voices_list[0]))
 
                     with gr.Row():
                         fastdub_spk1_voice = gr.Dropdown(fastdub_voices_list, value=default_v1, label="Speaker 1 (Homme)")

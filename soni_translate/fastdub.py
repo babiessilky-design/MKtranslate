@@ -80,7 +80,7 @@ def normalize_emotion_for_fish(raw_tag):
 
 
 def get_fastdub_voices():
-    """Récupère la liste des voix disponibles dans voice_library."""
+    """Récupère la liste des voix disponibles (voice_library + Edge-TTS Henri/Denise)."""
     voices = []
     candidate_dirs = [
         "voice_library",
@@ -94,15 +94,30 @@ def get_fastdub_voices():
                     name = os.path.splitext(f)[0]
                     if name not in voices:
                         voices.append(name)
-    if not voices:
-        voices = ["ref_homme_fr", "ref_femme_fr"]
+
+    edge_popular = [
+        "fr-FR-HenriNeural (Edge-TTS Homme)",
+        "fr-FR-DeniseNeural (Edge-TTS Femme)",
+        "fr-FR-EloiseNeural (Edge-TTS Femme)",
+        "fr-FR-AlainNeural (Edge-TTS Homme)",
+        "fr-FR-VivienneMultilingualNeural (Edge-TTS Femme)",
+        "fr-FR-RemyMultilingualNeural (Edge-TTS Homme)"
+    ]
+
     ordered = []
+    # Voix personnalisées prioritaires si présentes
     for pref in ["ref_homme_fr", "ref_femme_fr"]:
-        if pref in voices:
+        if pref in voices and pref not in ordered:
             ordered.append(pref)
     for v in voices:
         if v not in ordered:
             ordered.append(v)
+
+    # Ajout des voix Edge-TTS
+    for ev in edge_popular:
+        if ev not in ordered:
+            ordered.append(ev)
+
     return ordered
 
 
@@ -1160,10 +1175,14 @@ def render_fastdub_video(
                     logger.warning(f"FastDub : Fish Audio en échec sur réplique {idx+1} ({e_fish}). Basculement sur Edge-TTS...")
 
             if not generated_ok:
-                # Secours automatique Edge-TTS si Fish Audio indisponible ou a échoué
+                # Synthèse Edge-TTS (mode explicite ou secours automatique)
                 import edge_tts
                 import asyncio
-                clean_raw_text = diag["text"]
+                # Nettoyage strict et garanti de toutes les balises d'émotions pour Edge-TTS
+                clean_raw_text = re.sub(r'\[[^\]]+\]|\([^\)]+\)', '', str(diag.get("text", ""))).strip()
+                if not clean_raw_text:
+                    clean_raw_text = str(diag.get("text", "")).strip()
+
                 edge_voices_by_lang = {
                     "fr": ("fr-FR-HenriNeural", "fr-FR-DeniseNeural"),
                     "es": ("es-ES-AlvaroNeural", "es-ES-ElviraNeural"),
@@ -1175,8 +1194,14 @@ def render_fastdub_video(
                     "ar": ("ar-SA-HamedNeural", "ar-SA-ZariyahNeural"),
                     "ja": ("ja-JP-KeitaNeural", "ja-JP-NanamiNeural"),
                 }
-                m_v, f_v = edge_voices_by_lang.get(clean_target_lang, ("fr-FR-HenriNeural", "fr-FR-DeniseNeural"))
-                edge_v = f_v if diag["speaker"] == 2 else m_v
+
+                # Vérifier si l'utilisateur a choisi une voix Edge-TTS explicite dans les listes déroulantes
+                if voice_chosen and "neural" in str(voice_chosen).lower():
+                    edge_v = str(voice_chosen).split()[0].strip()
+                else:
+                    m_v, f_v = edge_voices_by_lang.get(clean_target_lang, ("fr-FR-HenriNeural", "fr-FR-DeniseNeural"))
+                    edge_v = f_v if diag["speaker"] == 2 else m_v
+
                 asyncio.run(edge_tts.Communicate(clean_raw_text, edge_v).save(out_chunk_path))
 
             # Lecture de l'audio généré
