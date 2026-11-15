@@ -1063,7 +1063,8 @@ def parse_dubbing_script(script_text):
             speech_text = line_pattern.sub('', speech_text).strip()
             speech_text = re.sub(r'\b\d+\s*$', '', speech_text).strip()
 
-            if not speech_text:
+            clean_speech = re.sub(r'\[[^\]]+\]|\([^\)]+\)', '', speech_text).strip()
+            if not clean_speech or not re.search(r'\w', clean_speech):
                 continue
 
             full_tts = f"{emotion_tag} {speech_text}".strip() if emotion_tag else speech_text
