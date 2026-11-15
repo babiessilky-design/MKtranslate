@@ -772,8 +772,19 @@ def process_subtitles(
     subs_copy_result["language"] = (
         "zh" if align_language == "zh-TW" else align_language
     )
-    for segment in subs_copy_result["segments"]:
+    for segment in subs_copy_result.get("segments", []):
         segment.pop("speaker", None)
+        words = segment.get("words")
+        if words is not None:
+            if not isinstance(words, list) or (len(words) > 0 and not isinstance(words[0], dict)):
+                segment.pop("words", None)
+            elif len(words) > 0 and "word" not in words[0]:
+                if "char" in words[0]:
+                    for w in words:
+                        if isinstance(w, dict) and "char" in w:
+                            w["word"] = w.get("char", "")
+                else:
+                    segment.pop("words", None)
 
     try:
         writer(
@@ -783,17 +794,22 @@ def process_subtitles(
         )
     except Exception as error:
         logger.error(str(error))
-        if str(error) == "list indices must be integers or slices, not str":
+        if "list indices must be integers or slices" in str(error):
             logger.error(
                 "Related to poor word segmentation"
                 " in segments after alignment."
             )
-        subs_copy_result["segments"][0].pop("words")
-        writer(
-            subs_copy_result,
-            name_ori[:-1] + ".mp3",
-            word_options,
-        )
+        for s in subs_copy_result.get("segments", []):
+            s.pop("words", None)
+            s.pop("chars", None)
+        try:
+            writer(
+                subs_copy_result,
+                name_ori[:-1] + ".mp3",
+                word_options,
+            )
+        except Exception as e_w2:
+            logger.error(f"Échec écriture sous-titres originaux: {e_w2}")
 
     # translated lang
     subs_tra_copy_result = copy.deepcopy(result_diarize)
@@ -801,15 +817,29 @@ def process_subtitles(
         "ja" if TRANSLATE_AUDIO_TO in ["ja", "zh", "zh-TW"] else align_language
     )
     subs_tra_copy_result.pop("word_segments", None)
-    for segment in subs_tra_copy_result["segments"]:
+    for segment in subs_tra_copy_result.get("segments", []):
         for key in ["speaker", "chars", "words"]:
             segment.pop(key, None)
 
-    writer(
-        subs_tra_copy_result,
-        name_tra[:-1] + ".mp3",
-        word_options,
-    )
+    try:
+        writer(
+            subs_tra_copy_result,
+            name_tra[:-1] + ".mp3",
+            word_options,
+        )
+    except Exception as error_tra:
+        logger.error(f"Erreur writer sous-titres traduits: {error_tra}")
+        for s in subs_tra_copy_result.get("segments", []):
+            s.pop("words", None)
+            s.pop("chars", None)
+        try:
+            writer(
+                subs_tra_copy_result,
+                name_tra[:-1] + ".mp3",
+                word_options,
+            )
+        except Exception:
+            pass
 
     return name_tra + output_format_subtitle
 

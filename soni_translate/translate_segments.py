@@ -197,11 +197,28 @@ def parse_llm_response(raw_text, expected_len=None):
 
     return lines if lines else None
 
+def _map_to_mymemory_lang(code):
+    """
+    Assure la compatibilité stricte des codes de langue pour MyMemoryTranslator
+    (ex: 'fr' -> 'fr-FR', 'en' -> 'en-US', 'es' -> 'es-ES').
+    """
+    c = str(code).lower().strip()
+    mapping = {
+        "fr": "fr-FR", "en": "en-US", "es": "es-ES", "de": "de-DE",
+        "it": "it-IT", "pt": "pt-BR", "zh": "zh-CN", "zh-cn": "zh-CN",
+        "zh-tw": "zh-TW", "ja": "ja-JP", "ko": "ko-KR", "ru": "ru-RU",
+        "ar": "ar-SA", "hi": "hi-IN", "nl": "nl-NL", "pl": "pl-PL",
+        "tr": "tr-TR", "vi": "vi-VN", "id": "id-ID", "th": "th-TH",
+        "uk": "uk-UA", "cs": "cs-CZ", "ro": "ro-RO", "el": "el-GR",
+        "sv": "sv-SE", "da": "da-DK", "fi": "fi-FI"
+    }
+    return mapping.get(c, code)
+
 def _single_translate(text, target_lang, source_lang="en"):
     """
     Traduction de secours ultra-robuste avec bascule automatique multi-moteurs :
     1. Google Translate
-    2. MyMemoryTranslator (contourne 100% des blocages d'IP Google Translate sur Colab)
+    2. MyMemoryTranslator (compatible 100% avec les codes de pays stricts)
     """
     orig_text = str(text).strip()
     if not orig_text:
@@ -218,10 +235,12 @@ def _single_translate(text, target_lang, source_lang="en"):
     except Exception as e:
         logger.warning(f"[_single_translate] Google Translate bloqué ({e}). Bascule immédiate sur MyMemory...")
 
-    # 2. Bascule automatique MyMemory (serveur indépendant, non affecté par le ban IP Google)
+    # 2. Bascule automatique MyMemory avec mapping de langue certifié
     try:
         from deep_translator import MyMemoryTranslator
-        mm = MyMemoryTranslator(source=src_clean, target=target_clean)
+        mm_src = _map_to_mymemory_lang(src_clean)
+        mm_target = _map_to_mymemory_lang(target_clean)
+        mm = MyMemoryTranslator(source=mm_src, target=mm_target)
         res = mm.translate(orig_text)
         if res and not is_corrupted_translation(res):
             logger.info(f"[_single_translate] Traduction MyMemory réussie pour '{orig_text[:25]}'")
@@ -595,8 +614,10 @@ def translate_iterative(segments, target, source=None):
             res = translator.translate(text.strip())
             if res and not is_corrupted_translation(res):
                 segments_[line]["text"] = res
-        except Exception as e:
-            logger.error(f"Error google iterative ligne {line}: {e}")
+            else:
+                segments_[line]["text"] = _single_translate(text, target_clean, source_clean)
+        except Exception:
+            segments_[line]["text"] = _single_translate(text, target_clean, source_clean)
     return segments_
 
 def translate_batch(segments, target, chunk_size=2000, source=None):
