@@ -1085,6 +1085,70 @@ def parse_dubbing_script(script_text):
 # ==============================================================================
 # 4. SYNTHÈSE VOCALE ET MIXAGE VIDÉO FLASH
 # ==============================================================================
+def synthesize_edge_tts_robust(text, voice, out_path, max_retries=3):
+    """
+    Synthèse Edge-TTS blindée avec assainissement typographique,
+    reconnexion automatique (retry) et bascule de secours si NoAudioReceived.
+    """
+    import edge_tts
+    import asyncio
+    import time
+
+    # Assainissement typographique (suppression des guillemets spéciaux, tirets et préfixes bizarres)
+    clean = str(text)
+    clean = re.sub(r'\[[^\]]+\]|\([^\)]+\)', '', clean).strip()
+    clean = clean.replace('«', '"').replace('»', '"').replace('“', '"').replace('”', '"')
+    clean = clean.replace('‘', "'").replace('’', "'")
+    clean = clean.replace('—', '-').replace('–', '-').replace('…', '...')
+    clean = re.sub(r'^(?:[:\s"\'\-–]+|Speaker\s*\d+\s*:\s*)', '', clean).strip()
+    clean = re.sub(r'[\u200b\u200c\u200d\ufeff]', '', clean).strip()
+    clean = clean.strip('"\'')
+
+    # Si le texte ne contient aucun mot ou lettre prononçable
+    if not clean or not re.search(r'\w', clean):
+        logger.warning(f"FastDub Edge-TTS : Réplique vide ou non prononçable ignorée ({repr(text)}).")
+        return False
+
+    clean_voice = voice.split()[0].strip() if voice else "fr-FR-HenriNeural"
+
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            if os.path.exists(out_path):
+                try: os.remove(out_path)
+                except: pass
+
+            async def _run_edge(v_to_use):
+                comm = edge_tts.Communicate(clean, v_to_use)
+                await comm.save(out_path)
+
+            asyncio.run(_run_edge(clean_voice))
+
+            if os.path.exists(out_path) and os.path.getsize(out_path) > 300:
+                # Mini pause de politesse réseau (40ms) pour éviter le rate-limiting sur des centaines de répliques
+                time.sleep(0.04)
+                return True
+        except Exception as e:
+            last_error = e
+            logger.warning(f"FastDub Edge-TTS : Tentative {attempt}/{max_retries} échouée pour '{clean_voice}' ({e}). Réessai dans {attempt}s...")
+            time.sleep(1.0 * attempt)
+
+    # Si la voix choisie continue de bloquer après 3 essais, tenter avec une voix de secours de la même langue
+    fallback_v = "fr-FR-AlainNeural" if "denise" in clean_voice.lower() or "henri" in clean_voice.lower() else "fr-FR-HenriNeural"
+    try:
+        logger.info(f"FastDub Edge-TTS : Tentative de secours ultime avec {fallback_v}...")
+        async def _run_fb():
+            comm = edge_tts.Communicate(clean, fallback_v)
+            await comm.save(out_path)
+        asyncio.run(_run_fb())
+        if os.path.exists(out_path) and os.path.getsize(out_path) > 300:
+            return True
+    except Exception as e_fb:
+        logger.error(f"FastDub Edge-TTS : Échec définitif de synthèse sur réplique ({clean[:35]}...) : {e_fb}")
+
+    return False
+
+
 def render_fastdub_video(
     media_path,
     script_text,
@@ -1180,14 +1244,7 @@ def render_fastdub_video(
                     logger.warning(f"FastDub : Fish Audio en échec sur réplique {idx+1} ({e_fish}). Basculement sur Edge-TTS...")
 
             if not generated_ok:
-                # Synthèse Edge-TTS (mode explicite ou secours automatique)
-                import edge_tts
-                import asyncio
-                # Nettoyage strict et garanti de toutes les balises d'émotions pour Edge-TTS
-                clean_raw_text = re.sub(r'\[[^\]]+\]|\([^\)]+\)', '', str(diag.get("text", ""))).strip()
-                if not clean_raw_text:
-                    clean_raw_text = str(diag.get("text", "")).strip()
-
+                # Synthèse Edge-TTS blindée avec retry automatique et assainissement
                 edge_voices_by_lang = {
                     "fr": ("fr-FR-HenriNeural", "fr-FR-DeniseNeural"),
                     "es": ("es-ES-AlvaroNeural", "es-ES-ElviraNeural"),
@@ -1200,14 +1257,14 @@ def render_fastdub_video(
                     "ja": ("ja-JP-KeitaNeural", "ja-JP-NanamiNeural"),
                 }
 
-                # Vérifier si l'utilisateur a choisi une voix Edge-TTS explicite dans les listes déroulantes
                 if voice_chosen and "neural" in str(voice_chosen).lower():
                     edge_v = str(voice_chosen).split()[0].strip()
                 else:
                     m_v, f_v = edge_voices_by_lang.get(clean_target_lang, ("fr-FR-HenriNeural", "fr-FR-DeniseNeural"))
                     edge_v = f_v if diag["speaker"] == 2 else m_v
 
-                asyncio.run(edge_tts.Communicate(clean_raw_text, edge_v).save(out_chunk_path))
+                raw_speech = str(diag.get("text", "")).strip()
+                generated_ok = synthesize_edge_tts_robust(raw_speech, edge_v, out_chunk_path)
 
             # Lecture de l'audio généré
             if os.path.exists(out_chunk_path) and os.path.getsize(out_chunk_path) > 1000:
