@@ -291,13 +291,13 @@ def split_segment_into_dialogue_sentences(seg):
             return sub_segs
 
     # 2. CAS TEXTE BRUT : DÉCOUPAGE RÉGEX ET INTERPOLATION TEMPORELLE (AVEC SUPPORT CHINOIS / CJK)
-    is_cjk = bool(re.search(r'[一-鿿]', raw_text))
+    is_cjk = bool(re.search(r'[\u4e00-\u9fff]', raw_text))
     if is_cjk:
-        # Découpage sur ponctuation chinoise pleine chasse : 。！？…
+        # Découpage sur ponctuation chinoise de fin de phrase : 。！？…
         sentences = [s.strip() for s in re.split(r'(?<=[。！？…])', raw_text) if s.strip()]
-        # Si aucune ponctuation forte et segment trop long (>= 4.0s), découper sur les virgules chinoises
-        if len(sentences) <= 1 and seg_dur >= 4.0:
-            sentences = [s.strip() for s in re.split(r'(?<=[，；])', raw_text) if s.strip()]
+        # Si aucune ponctuation forte et segment anormalement long (>= 8.0s), découper sur les points-virgules
+        if len(sentences) <= 1 and seg_dur >= 8.0:
+            sentences = [s.strip() for s in re.split(r'(?<=[；])', raw_text) if s.strip()]
     else:
         sentences = [s.strip() for s in re.split(r'(?<=[.!?…])\s+', raw_text) if s.strip()]
 
@@ -363,7 +363,7 @@ def merge_only_broken_word_fragments(segments, max_gap=0.9):
             cur_words = cur_text.split()
             
             clean_last = re.sub(r'^[^\w]+|[^\w]+$', '', cur_words[-1] if cur_words else '').lower()
-            ends_punct = cur_text[-1:] in ['.', '!', '?', '…', '。', '！', '？', '，', '；']
+            ends_punct = cur_text[-1:] in ['.', '!', '?', '…', '。', '！', '？']
             
             # Ne fusionne QUE si cur est manifestement un mot brisé/incomplet (sans ponctuation de fin)
             is_broken_fragment = False
