@@ -119,42 +119,79 @@ def edge_tts_voices_list():
     if _CACHED_EDGE_VOICES:
         return _CACHED_EDGE_VOICES
 
+    formatted_voices = []
+
+    # 1. Méthode Python asynchrone directe (la plus fiable et retourne directement les ShortName propres)
     try:
-        completed_process = subprocess.run(
-            ["edge-tts", "--list-voices"], capture_output=True, text=True
-        )
-        lines = completed_process.stdout.strip().split("\n")
-    except Exception as error:
-        logger.debug(str(error))
-        lines = []
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        if loop.is_running():
+            try:
+                import nest_asyncio
+                nest_asyncio.apply()
+                tts_voice_list = loop.run_until_complete(edge_tts.list_voices())
+            except Exception:
+                tts_voice_list = asyncio.run(edge_tts.list_voices())
+        else:
+            tts_voice_list = loop.run_until_complete(edge_tts.list_voices())
 
-    voices = []
-    for line in lines:
-        if line.startswith("Name: "):
-            voice_entry = {}
-            voice_entry["Name"] = line.split(": ")[1]
-        elif line.startswith("Gender: "):
-            voice_entry["Gender"] = line.split(": ")[1]
-            voices.append(voice_entry)
+        if tts_voice_list:
+            formatted_voices = sorted(
+                [f"{v['ShortName']}-{v['Gender']}" for v in tts_voice_list if 'ShortName' in v and 'Gender' in v]
+            )
+    except Exception as e_async:
+        logger.debug(f"Edge-TTS async list_voices failed: {e_async}")
 
-    formatted_voices = [
-        f"{entry['Name']}-{entry['Gender']}" for entry in voices
+    # 2. Méthode CLI de secours avec extraction stricte de ShortName
+    if not formatted_voices:
+        try:
+            completed_process = subprocess.run(
+                ["edge-tts", "--list-voices"], capture_output=True, text=True
+            )
+            lines = completed_process.stdout.strip().split("\n")
+            current_short = None
+            for line in lines:
+                l = line.strip()
+                if l.startswith("ShortName: "):
+                    current_short = l.split(": ", 1)[1].strip()
+                elif l.startswith("Name: ") and not current_short:
+                    raw_n = l.split(": ", 1)[1].strip()
+                    if "Microsoft Server" not in raw_n:
+                        current_short = raw_n
+                elif l.startswith("Gender: "):
+                    gender = l.split(": ", 1)[1].strip()
+                    if current_short:
+                        formatted_voices.append(f"{current_short}-{gender}")
+                        current_short = None
+        except Exception as error:
+            logger.debug(str(error))
+
+    # 3. Liste de secours absolue des voix système standard pour garantir qu'aucune valeur par défaut ne manque
+    essential_edge_voices = [
+        "en-US-EmmaMultilingualNeural-Female",
+        "en-US-AndrewMultilingualNeural-Male",
+        "en-US-AvaMultilingualNeural-Female",
+        "en-US-BrianMultilingualNeural-Male",
+        "de-DE-SeraphinaMultilingualNeural-Female",
+        "de-DE-FlorianMultilingualNeural-Male",
+        "fr-FR-VivienneMultilingualNeural-Female",
+        "fr-FR-RemyMultilingualNeural-Male",
+        "fr-FR-HenriNeural-Male",
+        "fr-FR-DeniseNeural-Female",
+        "fr-FR-EloiseNeural-Female",
+        "fr-FR-AlainNeural-Male",
+        "es-ES-AlvaroNeural-Male",
+        "es-ES-ElviraNeural-Female",
     ]
+    for ev in essential_edge_voices:
+        if ev not in formatted_voices:
+            formatted_voices.append(ev)
 
-    if not formatted_voices:
-        logger.warning(
-            "The list of Edge TTS voices could not be obtained, "
-            "switching to an alternative method"
-        )
-        tts_voice_list = asyncio.new_event_loop().run_until_complete(
-            edge_tts.list_voices()
-        )
-        formatted_voices = sorted(
-            [f"{v['ShortName']}-{v['Gender']}" for v in tts_voice_list]
-        )
-
-    if not formatted_voices:
-        logger.error("Can't get EDGE TTS - list voices")
+    formatted_voices = sorted(list(set(formatted_voices)))
 
     if formatted_voices:
         _CACHED_EDGE_VOICES = formatted_voices

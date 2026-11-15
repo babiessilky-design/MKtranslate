@@ -2285,6 +2285,21 @@ def create_gui(theme, logs_in_gui=False):
                         return [value for value in visibility_dict.values()]
 
                     shared_tts_voice_list = SoniTr.tts_info.tts_list()
+                    default_required_voices = [
+                        "en-US-EmmaMultilingualNeural-Female",
+                        "en-US-AndrewMultilingualNeural-Male",
+                        "en-US-AvaMultilingualNeural-Female",
+                        "en-US-BrianMultilingualNeural-Male",
+                        "de-DE-SeraphinaMultilingualNeural-Female",
+                        "de-DE-FlorianMultilingualNeural-Male",
+                        "fr-FR-VivienneMultilingualNeural-Female",
+                        "fr-FR-RemyMultilingualNeural-Male",
+                        "fr-FR-HenriNeural-Male",
+                        "fr-FR-DeniseNeural-Female",
+                    ]
+                    for rv in default_required_voices:
+                        if rv not in shared_tts_voice_list:
+                            shared_tts_voice_list.append(rv)
 
                     tts_voice00 = gr.Dropdown(
                         shared_tts_voice_list,
