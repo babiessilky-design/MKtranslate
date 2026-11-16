@@ -216,9 +216,10 @@ def _map_to_mymemory_lang(code):
 
 def _single_translate(text, target_lang, source_lang="en"):
     """
-    Traduction de secours ultra-robuste avec bascule automatique multi-moteurs :
-    1. Google Translate
-    2. MyMemoryTranslator (compatible 100% avec les codes de pays stricts)
+    Traduction de secours ultra-robuste avec priorité absolue aux modèles IA :
+    1. Gemini API directe (zéro blocage d'IP, qualité de traduction parfaite)
+    2. MyMemoryTranslator (serveur tiers avec codes de pays certifiés)
+    3. Google Translate (dernier recours)
     """
     orig_text = str(text).strip()
     if not orig_text:
@@ -226,16 +227,29 @@ def _single_translate(text, target_lang, source_lang="en"):
     target_clean = fix_code_language(target_lang)
     src_clean = fix_code_language(source_lang) if source_lang and source_lang != "auto" else "en"
 
-    # 1. Tentative Google Translate
-    try:
-        tr = GoogleTranslator(source='auto', target=target_clean)
-        res = tr.translate(orig_text)
-        if res and not is_corrupted_translation(res):
-            return res.strip()
-    except Exception as e:
-        logger.warning(f"[_single_translate] Google Translate bloqué ({e}). Bascule immédiate sur MyMemory...")
+    # 1. Tentative prioritaire via Gemini (si clé configurée)
+    gemini_keys = get_gemini_api_keys()
+    if gemini_keys:
+        try:
+            client = genai.Client(api_key=gemini_keys[0])
+            cfg = types.GenerateContentConfig(
+                temperature=0.1,
+                max_output_tokens=300,
+                system_instruction=f"You are a professional dubbing translator. Translate the given text to {target_clean}. Output ONLY the translated text without quotes, notes, or explanations."
+            )
+            resp = client.models.generate_content(
+                model="gemini-3.5-flash-lite",
+                contents=orig_text,
+                config=cfg
+            )
+            if resp.text:
+                clean_gem = resp.text.strip().strip('"\'')
+                if clean_gem and not is_corrupted_translation(clean_gem):
+                    return clean_gem
+        except Exception as e_gem:
+            logger.debug(f"[_single_translate] Secours Gemini unitaire ignoré ({e_gem})")
 
-    # 2. Bascule automatique MyMemory avec mapping de langue certifié
+    # 2. Bascule MyMemory avec mapping de langue certifié
     try:
         from deep_translator import MyMemoryTranslator
         mm_src = _map_to_mymemory_lang(src_clean)
@@ -243,10 +257,18 @@ def _single_translate(text, target_lang, source_lang="en"):
         mm = MyMemoryTranslator(source=mm_src, target=mm_target)
         res = mm.translate(orig_text)
         if res and not is_corrupted_translation(res):
-            logger.info(f"[_single_translate] Traduction MyMemory réussie pour '{orig_text[:25]}'")
             return res.strip()
     except Exception as e2:
-        logger.warning(f"[_single_translate] MyMemory a échoué ({e2}).")
+        logger.debug(f"[_single_translate] MyMemory ignoré ({e2})")
+
+    # 3. Dernier recours Google Translate
+    try:
+        tr = GoogleTranslator(source='auto', target=target_clean)
+        res = tr.translate(orig_text)
+        if res and not is_corrupted_translation(res):
+            return res.strip()
+    except Exception:
+        pass
 
     return orig_text
 
@@ -254,8 +276,8 @@ def _safe_batch_translate(batch, target_lang, source_lang="en"):
     """
     Traduction de secours groupée ultra-robuste :
     1. Si GROQ est configuré : Groq LLaMA-3.3 70B instantané
-    2. Concaténation Google Translate (1 seule requête HTTP réelle pour tout le lot)
-    3. Bascule MyMemoryTranslator si Google Translate est bloqué sur Colab
+    2. Secours Gemini simplifié (lot direct numéroté)
+    3. Bascule MyMemoryTranslator / Google Translate
     """
     target_clean = fix_code_language(target_lang)
     texts = [seg["text"].strip() if seg.get("text") else "" for seg in batch]
@@ -281,32 +303,38 @@ def _safe_batch_translate(batch, target_lang, source_lang="en"):
         except Exception as ge:
             logger.warning(f"Secours groupé Groq a échoué ({ge}).")
 
-    # 2. Tentative groupée par fusion Google Translate (1 SEULE requête HTTP réelle pour tout le lot)
-    try:
-        delimiter = " ||||| "
-        merged_text = delimiter.join(non_empty_texts)
-        tr = GoogleTranslator(source='auto', target=target_clean)
-        translated_merged = tr.translate(merged_text)
-        
-        if translated_merged and not is_corrupted_translation(translated_merged):
-            norm = translated_merged.replace(" | | | | | ", "|||||").replace(" |||| ", "|||||")
-            parts = [p.strip() for p in norm.split("|||||")]
-            if len(parts) == len(non_empty_texts):
+    # 2. Secours Gemini simplifié (lot direct numéroté sans contrainte de schéma JSON complexe)
+    gemini_keys = get_gemini_api_keys()
+    if gemini_keys:
+        try:
+            logger.info("Secours groupé : tentative via Gemini simplifié...")
+            client = genai.Client(api_key=gemini_keys[0])
+            lines_input = "\n".join([f"{i+1}. {txt}" for i, txt in enumerate(non_empty_texts)])
+            prompt = (
+                f"Translate each numbered line to {target_clean}. Output strictly the translated lines with their numbers (e.g. '1. ...\n2. ...'):\n\n"
+                f"{lines_input}"
+            )
+            cfg = types.GenerateContentConfig(temperature=0.2, max_output_tokens=3500)
+            resp = client.models.generate_content(
+                model="gemini-3.5-flash-lite",
+                contents=prompt,
+                config=cfg
+            )
+            res_lines = parse_llm_response(resp.text, len(non_empty_texts))
+            if res_lines and len(res_lines) == len(non_empty_texts):
                 clean_res = list(texts)
-                for idx, part in zip(non_empty_indices, parts):
-                    clean_res[idx] = part if not is_corrupted_translation(part) else texts[idx]
-                logger.info(f"Secours groupé Google (fusion 1 requête HTTP) réussi ({len(non_empty_texts)} phrases).")
+                for idx, item in zip(non_empty_indices, res_lines):
+                    clean_res[idx] = item if not is_corrupted_translation(item) else texts[idx]
+                logger.info(f"Secours groupé Gemini simplifié réussi ({len(non_empty_texts)} phrases).")
                 return clean_res
-            else:
-                logger.warning(f"Secours fusion: mismatch de segments ({len(parts)} reçus pour {len(non_empty_texts)} envoyés).")
-    except Exception as e:
-        logger.warning(f"Secours groupé Google par fusion a échoué ({e}). Bascule sur MyMemory...")
+        except Exception as ge_gem:
+            logger.debug(f"Secours groupé Gemini simplifié ignoré ({ge_gem}).")
 
-    # 3. Secours phrase par phrase avec bascule MyMemory automatique
+    # 3. Secours MyMemory / Google phrase par phrase
     clean_res = list(texts)
     for i in non_empty_indices:
         clean_res[i] = _single_translate(texts[i], target_clean, source_lang)
-        time.sleep(0.3)
+        time.sleep(0.1)
     return clean_res
 
 # ==============================================================================
