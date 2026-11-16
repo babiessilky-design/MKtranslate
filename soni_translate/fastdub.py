@@ -461,14 +461,8 @@ def transcribe_media_to_srt(media_path, asr_model="large-v3", source_lang="en", 
         shutil.rmtree(temp_dir, ignore_errors=True)
         return ""
 
-    # Découpage intelligent de tous les segments géants en répliques naturelles courtes
-    fine_segments = []
-    for seg in raw_segments:
-        sub_segs = split_segment_into_dialogue_sentences(seg)
-        fine_segments.extend(sub_segs)
-
-    # Rattachement exclusif des mots orphelins (ex: "You" + "look amazing.") sans jamais fusionner deux répliques distinctes
-    fine_segments = merge_only_broken_word_fragments(fine_segments, max_gap=0.9)
+    # Conservation intégrale de la segmentation naturelle Whisper d'origine
+    fine_segments = raw_segments
 
     # Détection si plusieurs locuteurs sont étiquetés (ex: Gemini ou Diarization)
     speakers_in_result = set(s.get("speaker") for s in fine_segments if s.get("speaker"))
@@ -1215,6 +1209,7 @@ def render_fastdub_video(
             fish_provider = FishAudioTTSProvider()
 
     total_diag = len(dialogues)
+    last_speaker_end_sample = {}
     for idx, diag in enumerate(dialogues):
         if progress:
             emo_info = f" ({diag['emotion']})" if diag.get("emotion") else ""
@@ -1278,29 +1273,36 @@ def render_fastdub_video(
                     import librosa
                     audio_data = librosa.resample(audio_data, orig_sr=sr, target_sr=target_sr)
 
-                # Ajustement de tempo si la réplique dépasse trop la durée allouée (+20%)
+                # Ajustement de tempo fluide si la réplique dépasse trop la durée allouée (+15%)
                 target_chunk_len = int(diag["duration"] * target_sr)
-                if len(audio_data) > target_chunk_len * 1.25 and target_chunk_len > 0:
-                    speed_factor = min(len(audio_data) / target_chunk_len, 1.4)
-                    speed_wav = os.path.join(chunks_dir, f"speed_{idx:04d}.wav")
-                    cmd_speed = [
-                        "ffmpeg", "-y", "-i", out_chunk_path,
-                        "-filter:a", f"atempo={speed_factor:.3f}",
-                        speed_wav
-                    ]
-                    subprocess.run(cmd_speed, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    if os.path.exists(speed_wav):
-                        audio_data, _ = sf.read(speed_wav)
-                        if audio_data.ndim > 1:
-                            audio_data = audio_data.mean(axis=1)
+                if len(audio_data) > target_chunk_len * 1.15 and target_chunk_len > 0:
+                    speed_factor = min(len(audio_data) / target_chunk_len, 1.8)
+                    if speed_factor > 1.05:
+                        speed_wav = os.path.join(chunks_dir, f"speed_{idx:04d}.wav")
+                        cmd_speed = [
+                            "ffmpeg", "-y", "-i", out_chunk_path,
+                            "-filter:a", f"atempo={speed_factor:.3f}",
+                            speed_wav
+                        ]
+                        subprocess.run(cmd_speed, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        if os.path.exists(speed_wav):
+                            audio_data, _ = sf.read(speed_wav)
+                            if audio_data.ndim > 1:
+                                audio_data = audio_data.mean(axis=1)
 
                 # Placement précis sur la piste master aux millisecondes indiquées
+                # avec protection anti-chevauchement pour éviter que le même locuteur ne se superpose
                 start_sample = int(diag["start"] * target_sr)
+                spk_key = diag.get("speaker", 1)
+                if spk_key in last_speaker_end_sample and start_sample < last_speaker_end_sample[spk_key]:
+                    start_sample = last_speaker_end_sample[spk_key] + int(0.04 * target_sr)
+
                 end_sample = min(start_sample + len(audio_data), total_samples)
                 length_to_paste = end_sample - start_sample
 
                 if length_to_paste > 0:
                     master_audio[start_sample:end_sample] += audio_data[:length_to_paste]
+                    last_speaker_end_sample[spk_key] = start_sample + len(audio_data)
 
         except Exception as e_tts:
             logger.error(f"Erreur synthèse FastDub réplique {idx+1}: {e_tts}")

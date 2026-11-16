@@ -210,17 +210,41 @@ def segments_egde_tts(filtered_edge_segments, TRANSLATE_AUDIO_TO, is_gui):
         filename = f"audio/{start}.ogg"
         temp_file = filename[:-3] + "mp3"
 
-        logger.info(f"{text} >> {filename}")
+        # Nettoyage et assainissement typographique du texte pour Edge-TTS
+        clean_text = str(text)
+        clean_text = re.sub(r'\[[^\]]+\]|\([^\)]+\)', '', clean_text).strip()
+        clean_text = clean_text.replace('«', '"').replace('»', '"').replace('“', '"').replace('”', '"')
+        clean_text = clean_text.replace('‘', "'").replace('’', "'")
+        clean_text = clean_text.replace('—', '-').replace('–', '-').replace('…', '...')
+        clean_text = re.sub(r'^(?:[:\s"\'\-–]+|Speaker\s*\d+\s*:\s*)', '', clean_text).strip()
+        clean_text = re.sub(r'[\u200b\u200c\u200d\ufeff]', '', clean_text).strip()
+        clean_text = clean_text.strip('"\'')
+
+        if not clean_text or not re.search(r'\w', clean_text):
+            logger.warning(f"Edge-TTS : Réplique vide ou non prononçable ({repr(text)}). Émission d'un silence propre.")
+            sample_rate_aux = 22050
+            duration = max(0.2, float(segment.get("end", start + 0.5)) - float(start))
+            data = np.zeros(int(sample_rate_aux * duration), dtype=np.float32)
+            write_chunked(file=filename, samplerate=sample_rate_aux, data=data, format="ogg", subtype="vorbis")
+            continue
+
+        # Extraction robuste du nom de la voix Edge-TTS
+        clean_voice = str(tts_name).split()[0].strip()
+        if clean_voice.endswith("-Male"):
+            clean_voice = clean_voice[:-5]
+        elif clean_voice.endswith("-Female"):
+            clean_voice = clean_voice[:-7]
+
+        logger.info(f"{clean_text} >> {filename} [{clean_voice}]")
         try:
             if is_gui:
                 asyncio.run(
                     edge_tts.Communicate(
-                        text, "-".join(tts_name.split("-")[:-1])
+                        clean_text, clean_voice
                     ).save(temp_file)
                 )
             else:
-                # nest_asyncio.apply() if not is_gui else None
-                command = f'edge-tts -t "{text}" -v "{tts_name.replace("-Male", "").replace("-Female", "")}" --write-media "{temp_file}"'
+                command = f'edge-tts -t "{clean_text}" -v "{clean_voice}" --write-media "{temp_file}"'
                 run_command(command)
             verify_saved_file_and_size(temp_file)
 

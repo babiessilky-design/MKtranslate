@@ -365,23 +365,24 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
 
         return t
 
+    # Nettoyage systématique des balises d'émotions et métadonnées parasites pour toutes les voix de base (Edge-TTS)
+    import copy
+    clean_diarize = copy.deepcopy(result_diarize)
+    for s_clean in clean_diarize.get("segments", []):
+        s_clean["text"] = re.sub(r'\[[^\]]+\]|\([^\)]+\)', '', str(s_clean.get("text", ""))).strip()
+
     # On regarde si au moins une voix "externe/custom" est demandee
     has_custom_tts = any(is_custom_ai_voice(v) for v in tts_voices)
     
     if not has_custom_tts:
-        # Fallback classique immediat si aucune voix IA n'est demandee
-        return original_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_gui, *args, **kwargs)
+        # Fallback classique immediat si aucune voix IA n'est demandee (avec diarize assaini pour Edge-TTS)
+        return original_audio_segmentation_to_voice(clean_diarize, TRANSLATE_AUDIO_TO, is_gui, *args, **kwargs)
     
     # --------------------------------------------------------------------------
     # ETAPE 1 : ON LANCE D'ABORD LA GENERATION ORIGINALE EN UN SEUL BLOC
     # Cela va vider le dossier 'audio' et generer proprement toutes les voix EdgeTTS de base.
-    # On nettoie au préalable les balises d'émotions pour que les voix EdgeTTS ne les lisent pas.
     # --------------------------------------------------------------------------
     logger.info("Running baseline SoniTranslate TTS generation...")
-    import copy
-    clean_diarize = copy.deepcopy(result_diarize)
-    for s_clean in clean_diarize.get("segments", []):
-        s_clean["text"] = re.sub(r'\[\s*(?:whisper|laughing|angry|excited|sad|surprised|sigh|crying|pause|calm)\s*\]', '', s_clean.get("text", ""), flags=re.IGNORECASE).strip()
     original_audio_segmentation_to_voice(clean_diarize, TRANSLATE_AUDIO_TO, is_gui, *args, **kwargs)
     
     # --------------------------------------------------------------------------
@@ -1432,7 +1433,7 @@ class SoniTranslate(SoniTrCache):
                 "result": self.result,
                 "align_language": self.align_language
             }):
-                if self.align_language in ["ja", "zh", "zh-TW", "zh-CN", "zh-cn", "zh-tw"]:
+                if self.align_language in ["ja", "zh", "zh-TW", "zh-CN", "zh-cn", "zh-tw"] and divide_text_segments_by:
                     divide_text_segments_by += "|!|?|...|。|！|？|…"
                 if text_segmentation_scale in ["word", "character"]:
                     self.result = linguistic_level_segments(
