@@ -56,21 +56,15 @@ def create_translated_audio(
 
                 duration_sec = len(audio) / 1000.0
 
-                if avoid_overlap:
-                    # Si le début théorique chevauche la parole précédente
-                    if start < last_end_time:
-                        # On décale pour que la parole commence dès la fin de la précédente
-                        # mais on plafonne le décalage à 1.2s max par rapport au timing visuel d'origine
-                        shifted_start = last_end_time + 0.05
-                        max_allowed_start = orig_start + 1.2
-                        start = min(shifted_start, max_allowed_start)
-                    else:
-                        # Si aucun chevauchement, resynchronisation directe sur le timing original (0 dérive)
-                        start = orig_start
-
-                    last_end_time = start + duration_sec
+                # Protection anti-chevauchement intelligente et enchaînement fluide
+                if start < last_end_time:
+                    # Décalage fluide pour enchaîner sans chevauchement destructif
+                    start = last_end_time + 0.04
                 else:
-                    last_end_time = start + duration_sec
+                    # Resynchronisation directe sur le timing original dès qu'une pause se présente (0 dérive)
+                    start = orig_start
+
+                last_end_time = start + duration_sec
 
                 start_ms = max(0, int(start * 1000))
                 needed_ms = start_ms + len(audio) + 1000

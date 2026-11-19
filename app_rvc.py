@@ -1033,15 +1033,15 @@ class SoniTranslate(SoniTrCache):
         tts_voice11="en-US-AndrewMultilingualNeural-Male",
         video_output_name="",
         mix_method_audio="Adjusting volumes and mixing audio",
-        max_accelerate_audio=2.1,
-        acceleration_rate_regulation=False,
+        max_accelerate_audio=1.20,
+        acceleration_rate_regulation=True,
         volume_original_audio=0.25,
         volume_translated_audio=1.80,
         output_format_subtitle="srt",
         get_translated_text=False,
         get_video_from_text_json=False,
         text_json="{}",
-        avoid_overlap=False,
+        avoid_overlap=True,
         vocal_refinement=False,
         literalize_numbers=True,
         segment_duration_limit=15,
@@ -2503,21 +2503,21 @@ def create_gui(theme, logs_in_gui=False):
                         ):
                             audio_accelerate = gr.Slider(
                                 label=lg_conf["acc_max_label"],
-                                value=1.9,
-                                step=0.1,
+                                value=1.2,
+                                step=0.05,
                                 minimum=1.0,
-                                maximum=2.5,
+                                maximum=1.5,
                                 visible=True,
                                 interactive=True,
                                 info=lg_conf["acc_max_info"],
                             )
                             acceleration_rate_regulation_gui = gr.Checkbox(
-                                False,
+                                True,
                                 label=lg_conf["acc_rate_label"],
                                 info=lg_conf["acc_rate_info"],
                             )
                             avoid_overlap_gui = gr.Checkbox(
-                                False,
+                                True,
                                 label=lg_conf["or_label"],
                                 info=lg_conf["or_info"],
                             )

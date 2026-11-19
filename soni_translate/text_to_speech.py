@@ -1206,43 +1206,34 @@ def accelerate_segments(
         # Accelerate percentage
         acc_percentage = duration_tts / duration_true
 
-        # Smoth
-        if acceleration_rate_regulation and acc_percentage >= 1.3:
+        # Régulation automatique et intelligente de l'accélération
+        # Vérification de l'espace disponible avec le segment suivant pour éviter d'accélérer inutilement
+        if acc_percentage > 1.08 and i < max_count_segments_idx:
             try:
-                next_segment = result_diarize["segments"][
-                    min(max_count_segments_idx, i + 1)
-                ]
-                next_start = next_segment["start"]
-                next_speaker = next_segment["speaker"]
+                next_segment = result_diarize["segments"][i + 1]
+                next_start = float(next_segment["start"])
                 duration_with_next_start = next_start - start
 
                 if duration_with_next_start > duration_true:
-                    extra_time = duration_with_next_start - duration_true
-
-                    if speaker == next_speaker:
-                        # half
-                        smoth_duration = duration_true + (extra_time * 0.5)
-                    else:
-                        # 7/10
-                        smoth_duration = duration_true + (extra_time * 0.7)
-                    logger.debug(
-                        f"Base acc: {acc_percentage}, "
-                        f"smoth acc: {duration_tts / smoth_duration}"
-                    )
-                    acc_percentage = max(1.2, (duration_tts / smoth_duration))
-
+                    # Emprunte une partie du silence jusqu'au segment suivant (laisse 60ms de respiration)
+                    borrowable_duration = max(duration_true, duration_with_next_start - 0.06)
+                    acc_regulated = duration_tts / borrowable_duration
+                    acc_percentage = min(acc_percentage, acc_regulated)
             except Exception as error:
-                logger.error(str(error))
+                logger.debug(f"Erreur lissage accélération: {error}")
 
-        if acc_percentage > max_accelerate_audio:
-            acc_percentage = max_accelerate_audio
-        elif acc_percentage <= 1.15 and acc_percentage >= 0.8:
+        # Plafond de vitesse naturelle : maximum 1.20x pour préserver le naturel humain
+        # Au-delà de 1.20x, la voix subit l'effet 'chipmunk' / haché métallique
+        SAFE_MAX_ACC = min(float(max_accelerate_audio), 1.20)
+        if acc_percentage > SAFE_MAX_ACC:
+            acc_percentage = SAFE_MAX_ACC
+        elif 0.85 <= acc_percentage <= 1.12:
             acc_percentage = 1.0
-        elif acc_percentage <= 0.79:
-            acc_percentage = 0.8
+        elif acc_percentage < 0.85:
+            acc_percentage = 0.85
 
-        # Round
-        acc_percentage = round(acc_percentage + 0.0, 1)
+        # Round (précision fluide à 2 décimales pour un tempo naturel sans à-coups)
+        acc_percentage = round(acc_percentage + 0.0, 2)
 
         # Format read if need
         if speaker in speakers_edge:

@@ -1210,6 +1210,7 @@ def render_fastdub_video(
 
     total_diag = len(dialogues)
     last_speaker_end_sample = {}
+    last_any_end_sample = 0
     for idx, diag in enumerate(dialogues):
         if progress:
             emo_info = f" ({diag['emotion']})" if diag.get("emotion") else ""
@@ -1273,11 +1274,34 @@ def render_fastdub_video(
                     import librosa
                     audio_data = librosa.resample(audio_data, orig_sr=sr, target_sr=target_sr)
 
-                # Ajustement de tempo fluide si la réplique dépasse trop la durée allouée (+15%)
-                target_chunk_len = int(diag["duration"] * target_sr)
-                if len(audio_data) > target_chunk_len * 1.15 and target_chunk_len > 0:
-                    speed_factor = min(len(audio_data) / target_chunk_len, 1.8)
-                    if speed_factor > 1.05:
+                # 1. Élimination des silences de conteneur MP3 (Edge-TTS) au début et à la fin
+                # pour ne mesurer et ne caler que la parole réelle (évite d'accélérer du silence)
+                valid_idx = np.where(np.abs(audio_data) > 0.005)[0]
+                if len(valid_idx) > 0:
+                    pad_s = int(0.035 * target_sr)  # 35ms de marge naturelle
+                    s_trim = max(0, valid_idx[0] - pad_s)
+                    e_trim = min(len(audio_data), valid_idx[-1] + 1 + pad_s)
+                    audio_data = audio_data[s_trim:e_trim]
+
+                # 2. Régulation rythmique intelligente et emprunt du silence suivant
+                nom_dur = float(diag["duration"])
+                if idx + 1 < total_diag:
+                    next_s = float(dialogues[idx + 1]["start"])
+                    avail_dur = max(nom_dur, next_s - float(diag["start"]))
+                else:
+                    avail_dur = max(nom_dur, total_media_duration - float(diag["start"]))
+
+                # Espace utilisable sans empiéter sur la réplique suivante (laisse 50ms de respiration)
+                usable_dur = max(nom_dur, avail_dur - 0.05)
+                target_chunk_len = int(usable_dur * target_sr)
+
+                # Ajustement de tempo fluide si la parole dépasse l'espace utilisable
+                if len(audio_data) > target_chunk_len * 1.08 and target_chunk_len > 0:
+                    speed_factor = len(audio_data) / target_chunk_len
+                    # Plafond strict à 1.18x : garantit zéro effet chipmunk ou voix hachée en 'chunks'
+                    speed_factor = min(speed_factor, 1.18)
+
+                    if speed_factor > 1.04:
                         speed_wav = os.path.join(chunks_dir, f"speed_{idx:04d}.wav")
                         cmd_speed = [
                             "ffmpeg", "-y", "-i", out_chunk_path,
@@ -1290,11 +1314,19 @@ def render_fastdub_video(
                             if audio_data.ndim > 1:
                                 audio_data = audio_data.mean(axis=1)
 
-                # Placement précis sur la piste master aux millisecondes indiquées
-                # avec protection anti-chevauchement pour éviter que le même locuteur ne se superpose
+                # 3. Placement précis sur la piste master aux millisecondes indiquées
+                # avec protection anti-chevauchement intelligente
                 start_sample = int(diag["start"] * target_sr)
                 spk_key = diag.get("speaker", 1)
-                if spk_key in last_speaker_end_sample and start_sample < last_speaker_end_sample[spk_key]:
+
+                # Si deux répliques se suivent sans chevauchement originel, on assure un enchaînement propre
+                prev_orig_end = float(dialogues[idx - 1]["end"]) if idx > 0 else 0.0
+                originally_overlapped = (float(diag["start"]) < (prev_orig_end - 0.08)) if idx > 0 else False
+
+                if not originally_overlapped and idx > 0:
+                    if start_sample < last_any_end_sample:
+                        start_sample = last_any_end_sample + int(0.04 * target_sr)
+                elif spk_key in last_speaker_end_sample and start_sample < last_speaker_end_sample[spk_key]:
                     start_sample = last_speaker_end_sample[spk_key] + int(0.04 * target_sr)
 
                 end_sample = min(start_sample + len(audio_data), total_samples)
@@ -1303,6 +1335,7 @@ def render_fastdub_video(
                 if length_to_paste > 0:
                     master_audio[start_sample:end_sample] += audio_data[:length_to_paste]
                     last_speaker_end_sample[spk_key] = start_sample + len(audio_data)
+                    last_any_end_sample = start_sample + len(audio_data)
 
         except Exception as e_tts:
             logger.error(f"Erreur synthèse FastDub réplique {idx+1}: {e_tts}")
