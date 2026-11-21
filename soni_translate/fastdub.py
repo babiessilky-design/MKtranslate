@@ -97,11 +97,10 @@ def get_fastdub_voices():
 
     edge_popular = [
         "fr-FR-HenriNeural (Edge-TTS Homme)",
+        "fr-FR-RemyMultilingualNeural (Edge-TTS Homme)",
         "fr-FR-DeniseNeural (Edge-TTS Femme)",
-        "fr-FR-EloiseNeural (Edge-TTS Femme)",
-        "fr-FR-AlainNeural (Edge-TTS Homme)",
         "fr-FR-VivienneMultilingualNeural (Edge-TTS Femme)",
-        "fr-FR-RemyMultilingualNeural (Edge-TTS Homme)"
+        "fr-FR-EloiseNeural (Edge-TTS Femme)"
     ]
 
     ordered = []
@@ -1082,12 +1081,15 @@ def parse_dubbing_script(script_text):
 # ==============================================================================
 def synthesize_edge_tts_robust(text, voice, out_path, max_retries=3):
     """
-    Synthèse Edge-TTS blindée avec assainissement typographique,
-    reconnexion automatique (retry) et bascule de secours si NoAudioReceived.
+    Synthèse Edge-TTS ultra-robuste avec assainissement typographique,
+    double méthode d'exécution (API asynchrone Python + binaire CLI edge-tts en sous-processus isolé),
+    rotation automatique de voix officielles valides (Multilingual / Denise / Remy / Henri)
+    et gestion de pause réseau anti-blocage.
     """
     import edge_tts
     import asyncio
     import time
+    import subprocess
 
     # Assainissement typographique (suppression des guillemets spéciaux, tirets et préfixes bizarres)
     clean = str(text)
@@ -1106,41 +1108,55 @@ def synthesize_edge_tts_robust(text, voice, out_path, max_retries=3):
 
     clean_voice = voice.split()[0].strip() if voice else "fr-FR-HenriNeural"
 
-    last_error = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            if os.path.exists(out_path):
-                try: os.remove(out_path)
-                except: pass
+    # Liste des voix officielles Azure Edge-TTS valides par ordre de priorité selon le genre
+    is_female = any(x in clean_voice.lower() for x in ["femme", "female", "denise", "eloise", "vivienne", "katja", "elza", "jenny"])
+    if is_female:
+        voice_candidates = [clean_voice, "fr-FR-DeniseNeural", "fr-FR-VivienneMultilingualNeural", "fr-FR-EloiseNeural"]
+    else:
+        voice_candidates = [clean_voice, "fr-FR-HenriNeural", "fr-FR-RemyMultilingualNeural"]
 
-            async def _run_edge(v_to_use):
-                comm = edge_tts.Communicate(clean, v_to_use)
-                await comm.save(out_path)
+    # Dédoublonnage en préservant l'ordre
+    seen = set()
+    voice_queue = []
+    for v in voice_candidates:
+        if v and v not in seen:
+            seen.add(v)
+            voice_queue.append(v)
 
-            asyncio.run(_run_edge(clean_voice))
+    for v_idx, v_name in enumerate(voice_queue):
+        for attempt in range(1, max_retries + 1):
+            try:
+                if os.path.exists(out_path):
+                    try: os.remove(out_path)
+                    except: pass
 
-            if os.path.exists(out_path) and os.path.getsize(out_path) > 300:
-                # Mini pause de politesse réseau (40ms) pour éviter le rate-limiting sur des centaines de répliques
-                time.sleep(0.04)
-                return True
-        except Exception as e:
-            last_error = e
-            logger.warning(f"FastDub Edge-TTS : Tentative {attempt}/{max_retries} échouée pour '{clean_voice}' ({e}). Réessai dans {attempt}s...")
-            time.sleep(1.0 * attempt)
+                # Tentative A : via l'API asynchrone edge_tts Communicate
+                async def _run_edge(v_target):
+                    comm = edge_tts.Communicate(clean, v_target)
+                    await comm.save(out_path)
 
-    # Si la voix choisie continue de bloquer après 3 essais, tenter avec une voix de secours de la même langue
-    fallback_v = "fr-FR-AlainNeural" if "denise" in clean_voice.lower() or "henri" in clean_voice.lower() else "fr-FR-HenriNeural"
-    try:
-        logger.info(f"FastDub Edge-TTS : Tentative de secours ultime avec {fallback_v}...")
-        async def _run_fb():
-            comm = edge_tts.Communicate(clean, fallback_v)
-            await comm.save(out_path)
-        asyncio.run(_run_fb())
-        if os.path.exists(out_path) and os.path.getsize(out_path) > 300:
-            return True
-    except Exception as e_fb:
-        logger.error(f"FastDub Edge-TTS : Échec définitif de synthèse sur réplique ({clean[:35]}...) : {e_fb}")
+                try:
+                    asyncio.run(_run_edge(v_name))
+                except Exception as e_async:
+                    # Tentative B de secours immédiat : via la commande CLI edge-tts (processus indépendant avec son propre loop)
+                    cmd = ["edge-tts", "--voice", v_name, "--text", clean, "--write-media", out_path]
+                    subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20)
 
+                if os.path.exists(out_path) and os.path.getsize(out_path) > 300:
+                    time.sleep(0.06)  # Pause pour éviter les drops serveurs Microsoft
+                    return True
+                else:
+                    raise RuntimeError("Fichier audio non créé ou vide (< 300 octets)")
+
+            except Exception as e:
+                logger.warning(f"FastDub Edge-TTS : Tentative {attempt}/{max_retries} échouée pour '{v_name}' ({e}).")
+                time.sleep(0.5 * attempt)
+
+        # Si cette voix a échoué 3 fois, passer à la voix alternative
+        if v_idx + 1 < len(voice_queue):
+            logger.info(f"FastDub Edge-TTS : Basculement de secours sur '{voice_queue[v_idx + 1]}'...")
+
+    logger.error(f"FastDub Edge-TTS : Échec définitif de synthèse sur la réplique ({clean[:35]}...).")
     return False
 
 
@@ -1303,16 +1319,24 @@ def render_fastdub_video(
 
                     if speed_factor > 1.04:
                         speed_wav = os.path.join(chunks_dir, f"speed_{idx:04d}.wav")
+                        temp_44k = os.path.join(chunks_dir, f"temp44k_{idx:04d}.wav")
+                        # Sauvegarde du signal déjà tronqué et garanti à 44100 Hz
+                        sf.write(temp_44k, audio_data, target_sr)
+
                         cmd_speed = [
-                            "ffmpeg", "-y", "-i", out_chunk_path,
+                            "ffmpeg", "-y", "-i", temp_44k,
                             "-filter:a", f"atempo={speed_factor:.3f}",
+                            "-ar", str(target_sr),
                             speed_wav
                         ]
                         subprocess.run(cmd_speed, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                         if os.path.exists(speed_wav):
-                            audio_data, _ = sf.read(speed_wav)
+                            audio_data, new_sr = sf.read(speed_wav)
                             if audio_data.ndim > 1:
                                 audio_data = audio_data.mean(axis=1)
+                            if new_sr != target_sr:
+                                import librosa
+                                audio_data = librosa.resample(audio_data, orig_sr=new_sr, target_sr=target_sr)
 
                 # 3. Placement précis sur la piste master aux millisecondes indiquées
                 # avec protection anti-chevauchement intelligente
