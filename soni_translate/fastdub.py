@@ -8,7 +8,7 @@ import numpy as np
 import soundfile as sf
 import subprocess
 
-logger = logging.getLogger("soni_translate.fastdub")
+from .logging_setup import logger
 
 # ==============================================================================
 # MAPPING INTELLIGENT DES ÉMOTIONS (FRANÇAIS -> FISH AUDIO TAGS)
@@ -1277,11 +1277,13 @@ def render_fastdub_video(
                     edge_v = f_v if diag["speaker"] == 2 else m_v
 
                 raw_speech = str(diag.get("text", "")).strip()
+                logger.info(f"FastDub TTS : Synthèse réplique {idx+1}/{total_diag} ({raw_speech[:35]}...) [{edge_v}]")
                 generated_ok = synthesize_edge_tts_robust(raw_speech, edge_v, out_chunk_path)
 
             # Lecture de l'audio généré
             if os.path.exists(out_chunk_path) and os.path.getsize(out_chunk_path) > 1000:
                 audio_data, sr = sf.read(out_chunk_path)
+                logger.info(f"FastDub TTS : Réplique {idx+1}/{total_diag} générée avec succès.")
                 if audio_data.ndim > 1:
                     audio_data = audio_data.mean(axis=1)
 
