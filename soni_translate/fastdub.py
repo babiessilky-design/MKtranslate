@@ -1282,6 +1282,7 @@ def render_fastdub_video(
 
     # Initialisation du TTS Provider
     fish_provider = None
+    chatterbox_provider = None
     if tts_engine == "fish_audio":
         try:
             from soni_translate.tts_providers.fish_audio import FishAudioProvider
@@ -1289,6 +1290,18 @@ def render_fastdub_video(
         except ImportError:
             from soni_translate.tts_providers.fish_audio import FishAudioTTSProvider
             fish_provider = FishAudioTTSProvider()
+    elif tts_engine == "chatterbox":
+        try:
+            from soni_translate.tts_providers.chatterbox import ChatterBoxProvider
+            chatterbox_provider = ChatterBoxProvider()
+            logger.info("FastDub : Initialisation du provider Chatterbox Multilingual...")
+        except ImportError:
+            try:
+                from .tts_providers.chatterbox import ChatterBoxProvider
+                chatterbox_provider = ChatterBoxProvider()
+                logger.info("FastDub : Initialisation du provider Chatterbox Multilingual...")
+            except Exception as e_cb:
+                logger.error(f"FastDub : Impossible de charger Chatterbox ({e_cb}).")
 
     total_diag = len(dialogues)
     last_speaker_end_sample = {}
@@ -1299,7 +1312,7 @@ def render_fastdub_video(
             progress(0.1 + (0.75 * (idx / max(total_diag, 1))), desc=f"Synthèse réplique {idx+1}/{total_diag}{emo_info}...")
 
         voice_chosen = speaker2_voice if diag["speaker"] == 2 else speaker1_voice
-        # Nettoyage total et garanti pour tous les moteurs TTS (Fish Audio et Edge-TTS)
+        # Nettoyage total et garanti pour tous les moteurs TTS (Fish Audio, Chatterbox et Edge-TTS)
         clean_speech = re.sub(r'\[[^\]]+\]|\([^\)]+\)', '', str(diag.get("text", ""))).strip()
         if not clean_speech:
             clean_speech = str(diag.get("text", "")).strip()
@@ -1309,7 +1322,26 @@ def render_fastdub_video(
 
         generated_ok = False
         try:
-            if tts_engine == "fish_audio" and fish_provider:
+            if tts_engine == "chatterbox" and chatterbox_provider:
+                try:
+                    cb_voice = voice_chosen
+                    if not cb_voice or "neural" in str(cb_voice).lower() or "(" in str(cb_voice):
+                        cb_voice = "ref_femme_fr" if diag["speaker"] == 2 else "ref_homme_fr"
+                    seg_dur = max(0.5, float(diag.get("end", 0.0)) - float(diag.get("start", 0.0)))
+                    logger.info(f"FastDub Chatterbox : Synthèse réplique {idx+1}/{total_diag} ({tts_text[:35]}...) [{cb_voice}]")
+                    chatterbox_provider.generate(
+                        text=tts_text,
+                        voice=cb_voice,
+                        target_lang=clean_target_lang,
+                        output_file=out_chunk_path,
+                        seg_duration=seg_dur
+                    )
+                    if os.path.exists(out_chunk_path) and os.path.getsize(out_chunk_path) > 1000:
+                        generated_ok = True
+                except Exception as e_chatt:
+                    logger.warning(f"FastDub : Chatterbox en échec sur réplique {idx+1} ({e_chatt}). Basculement de secours sur Edge-TTS...")
+
+            elif tts_engine == "fish_audio" and fish_provider:
                 try:
                     fish_provider.generate(
                         text=tts_text,

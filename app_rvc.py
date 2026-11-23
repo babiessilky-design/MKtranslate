@@ -2970,7 +2970,7 @@ def create_gui(theme, logs_in_gui=False):
                         fastdub_spk2_voice = gr.Dropdown(fastdub_voices_list, value=default_v2, label="Speaker 2 (Femme)")
                     
                     with gr.Row():
-                        fastdub_tts_engine = gr.Dropdown(["fish_audio", "edge_tts"], value="fish_audio", label="Moteur TTS")
+                        fastdub_tts_engine = gr.Dropdown(["fish_audio", "edge_tts", "chatterbox"], value="fish_audio", label="Moteur TTS")
                         fastdub_voiceless_track = gr.Checkbox(
                             value=True,
                             label="Piste sans voix (IA UVR)",
