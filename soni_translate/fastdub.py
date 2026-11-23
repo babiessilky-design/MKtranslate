@@ -2,6 +2,7 @@ import os
 import re
 import time
 import shutil
+import hashlib
 import logging
 import tempfile
 import numpy as np
@@ -1160,6 +1161,70 @@ def synthesize_edge_tts_robust(text, voice, out_path, max_retries=3):
     return False
 
 
+def extract_fastdub_voiceless_track(media_path, work_dir, progress=None):
+    """
+    Extrait la piste audio instrumentale (sans voix) du média source à l'aide d'UVR-MDX-Net.
+    Comprend une mise en cache basée sur l'empreinte du fichier pour éviter de recalculer
+    UVR si le même média est rejoué avec d'autres voix ou paramètres.
+    """
+    cache_dir = os.path.join("clean_song_output", "fastdub_cache")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    try:
+        st = os.stat(media_path)
+        file_sig = f"{os.path.abspath(media_path)}_{st.st_size}_{int(st.st_mtime)}"
+    except Exception:
+        file_sig = f"{os.path.abspath(media_path)}"
+    file_hash = hashlib.md5(file_sig.encode("utf-8")).hexdigest()[:12]
+    cached_voiceless = os.path.join(cache_dir, f"{file_hash}_Voiceless.wav")
+
+    if os.path.exists(cached_voiceless) and os.path.getsize(cached_voiceless) > 1000:
+        logger.info(f"FastDub UVR : Piste sans voix trouvée en cache ({cached_voiceless}) ! Réutilisation immédiate.")
+        return cached_voiceless
+
+    # 1. Extraction d'un WAV stéréo propre à 44.1 kHz depuis le média source
+    extracted_source_wav = os.path.join(work_dir, f"source_{file_hash}.wav")
+    cmd_extract = [
+        "ffmpeg", "-y",
+        "-i", media_path,
+        "-vn",
+        "-acodec", "pcm_s16le",
+        "-ar", "44100",
+        "-ac", "2",
+        extracted_source_wav
+    ]
+    try:
+        subprocess.run(cmd_extract, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    except Exception as e_ext:
+        logger.error(f"FastDub UVR : Impossible d'extraire l'audio source pour UVR ({e_ext}).")
+        return None
+
+    # 2. Exécution du modèle UVR MDX-Net
+    try:
+        if progress:
+            progress(0.85, desc="Extraction de la piste sans voix (IA UVR)...")
+        logger.info(f"FastDub UVR : Séparation de la piste sans voix avec UVR-MDX-Net sur '{os.path.basename(media_path)}'...")
+        try:
+            from .mdx_net import process_uvr_task
+        except ImportError:
+            from soni_translate.mdx_net import process_uvr_task
+
+        uvr_voiceless_wav, _ = process_uvr_task(
+            orig_song_path=extracted_source_wav,
+            song_id=f"fastdub_{file_hash}",
+            only_voiceless=True,
+            remove_files_output_dir=False
+        )
+        if uvr_voiceless_wav and os.path.exists(uvr_voiceless_wav) and os.path.getsize(uvr_voiceless_wav) > 1000:
+            shutil.copyfile(uvr_voiceless_wav, cached_voiceless)
+            logger.info(f"FastDub UVR : Piste sans voix extraite avec succès et mise en cache ({cached_voiceless}).")
+            return cached_voiceless
+    except Exception as e_uvr:
+        logger.error(f"FastDub UVR : Erreur lors de l'extraction UVR ({e_uvr}). Repli sur le fond sonore standard.")
+
+    return None
+
+
 def render_fastdub_video(
     media_path,
     script_text,
@@ -1167,7 +1232,8 @@ def render_fastdub_video(
     speaker2_voice="ref_femme_fr",
     tts_engine="fish_audio",
     target_lang="fr",
-    background_volume=0.15,
+    voiceless_track=True,
+    background_volume=0.85,
     progress=None
 ):
     """
@@ -1381,22 +1447,53 @@ def render_fastdub_video(
     dubbed_vocals_wav = os.path.join(work_dir, "master_dubbed_vocals.wav")
     sf.write(dubbed_vocals_wav, master_audio, target_sr)
 
-    if progress:
-        progress(0.90, desc="Mixage avec le fond sonore original...")
-
-    # Mixage avec le fond sonore original (ducking de la piste d'origine à background_volume)
+    # Mixage audio final
     mixed_audio_wav = os.path.join(work_dir, "final_mixed_audio.wav")
-    vol_str = f"{background_volume:.2f}"
-    cmd_mix = [
-        "ffmpeg", "-y",
-        "-i", media_path,
-        "-i", dubbed_vocals_wav,
-        "-filter_complex", f"[0:a]volume={vol_str}[bg];[bg][1:a]amix=inputs=2:duration=first:dropout_transition=2[aout]",
-        "-map", "[aout]",
-        "-ac", "2", "-ar", "44100",
-        mixed_audio_wav
-    ]
-    subprocess.run(cmd_mix, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+
+    # Détection du mode piste sans voix
+    use_voiceless = True
+    if isinstance(voiceless_track, bool):
+        use_voiceless = voiceless_track
+    elif isinstance(voiceless_track, (int, float)):
+        use_voiceless = float(voiceless_track) > 0.0
+        if float(voiceless_track) > 0.0:
+            background_volume = float(voiceless_track)
+
+    if use_voiceless:
+        if progress:
+            progress(0.88, desc="Préparation de la piste sans voix (IA UVR)...")
+        voiceless_bg_path = extract_fastdub_voiceless_track(media_path, work_dir, progress=progress)
+
+        if voiceless_bg_path and os.path.exists(voiceless_bg_path):
+            if progress:
+                progress(0.92, desc="Mixage de la musique et bruitages avec le doublage...")
+            logger.info("FastDub Mixage : Fusion de la piste sans voix (UVR) et du doublage vocal...")
+            vol_bg = f"{background_volume:.2f}" if background_volume else "0.85"
+            cmd_mix = [
+                "ffmpeg", "-y",
+                "-i", voiceless_bg_path,
+                "-i", dubbed_vocals_wav,
+                "-filter_complex", f"[0:a]volume={vol_bg}[bg];[1:a]volume=1.0[voc];[bg][voc]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+                "-map", "[aout]",
+                "-ac", "2", "-ar", "44100",
+                mixed_audio_wav
+            ]
+            subprocess.run(cmd_mix, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        else:
+            logger.warning("FastDub Mixage : Piste UVR indisponible, repli sur l'atténuation sonore standard.")
+            cmd_mix = [
+                "ffmpeg", "-y",
+                "-i", media_path,
+                "-i", dubbed_vocals_wav,
+                "-filter_complex", "[0:a]volume=0.15[bg];[bg][1:a]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+                "-map", "[aout]",
+                "-ac", "2", "-ar", "44100",
+                mixed_audio_wav
+            ]
+            subprocess.run(cmd_mix, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    else:
+        logger.info("FastDub Mixage : Piste sans voix désactivée. Doublage voix solo uniquement.")
+        mixed_audio_wav = dubbed_vocals_wav
 
     def has_video_stream(fpath):
         cmd = [
