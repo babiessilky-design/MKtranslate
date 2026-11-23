@@ -349,6 +349,23 @@ class FishAudioProvider(BaseTTSProvider):
             return True
         return False
 
+    def _ensure_sample_rate_44k(self, output_file, target_sr=44100):
+        """Vérifie et garantit que le fichier WAV produit par Fish Audio est strictement à 44100 Hz."""
+        if not os.path.exists(output_file) or os.path.getsize(output_file) < 500:
+            return
+        try:
+            import soundfile as sf
+            info = sf.info(output_file)
+            if info.samplerate != target_sr:
+                import librosa
+                data, cur_sr = sf.read(output_file)
+                if data.ndim > 1:
+                    data = data.mean(axis=1)
+                data = librosa.resample(data, orig_sr=cur_sr, target_sr=target_sr)
+                sf.write(output_file, data, target_sr)
+        except Exception as e:
+            self.logger.debug(f"Vérification sample rate Fish Audio: {e}")
+
     def generate(self, text, voice, target_lang, output_file, **kwargs):
         """Synthèse vocale Fish Audio S2-Pro en précision FP16."""
         # Résolution du nom de voix
@@ -371,7 +388,7 @@ class FishAudioProvider(BaseTTSProvider):
             os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
             silence_arr = np.zeros(int(sample_rate * 0.4), dtype=np.float32)
             sf.write(output_file, silence_arr, sample_rate)
-            return
+            return True
 
         # Ponctuation terminale protectrice pour clore l'auto-régression
         if clean_text[-1] not in ('.', '!', '?', ':', ';', '…'):
@@ -381,14 +398,16 @@ class FishAudioProvider(BaseTTSProvider):
         if self.api_key:
             try:
                 if self._generate_via_sdk(clean_text, ref_audio, output_file):
-                    return
+                    self._ensure_sample_rate_44k(output_file)
+                    return True
             except Exception as e_sdk:
                 self.logger.warning(f"Fish Audio SDK API error ({e_sdk}), basculement sur le moteur local...")
 
         # 2. Priorité B : Serveur API local si actif (ex: sur port 8080)
         try:
             if self._generate_via_http_server(clean_text, ref_audio, ref_text, output_file):
-                return
+                self._ensure_sample_rate_44k(output_file)
+                return True
         except Exception:
             pass
 
