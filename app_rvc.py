@@ -33,15 +33,38 @@ for _f_dir in [os.path.join(_current_dir, "fish_speech"), os.path.join(_current_
 # 1. Évite le conflit cuDNN en forçant PyTorch à utiliser les cœurs CUDA natifs stables
 torch.backends.cudnn.enabled = False
 
-# 2. Pré-chargement ciblé uniquement sur cuBLAS 12 pour WhisperX / CTranslate2
-cublas_dir = "/content/SoniTranslate/.venv/lib/python3.10/site-packages/nvidia/cublas/lib"
-if os.path.exists(cublas_dir):
-    for f in os.listdir(cublas_dir):
-        if f.startswith("libcublas") and (".so" in f):
-            try:
-                ctypes.CDLL(os.path.join(cublas_dir, f), mode=ctypes.RTLD_GLOBAL)
-            except Exception:
-                pass
+# 2. Pré-chargement et symlinks ciblés cuBLAS & cuFFT (résout libcufft.so.11 manquant sous CUDA 12 pour ONNXRuntime)
+for lib_base in ["cublas", "cufft", "cudnn"]:
+    nvidia_lib_dir = f"/content/SoniTranslate/.venv/lib/python3.10/site-packages/nvidia/{lib_base}/lib"
+    if os.path.exists(nvidia_lib_dir):
+        for f in os.listdir(nvidia_lib_dir):
+            if (".so" in f):
+                try:
+                    ctypes.CDLL(os.path.join(nvidia_lib_dir, f), mode=ctypes.RTLD_GLOBAL)
+                except Exception:
+                    pass
+
+try:
+    import glob
+    candidates_cufft = (
+        glob.glob("/content/SoniTranslate/.venv/lib/python*/site-packages/nvidia/cufft/lib/libcufft.so*")
+        + glob.glob("/usr/local/cuda*/lib64/libcufft.so*")
+        + glob.glob("/usr/lib/*-linux-gnu*/libcufft.so*")
+    )
+    for c_path in candidates_cufft:
+        if os.path.isfile(c_path) and not os.path.islink(c_path):
+            for t_dir in ["/usr/lib", "/usr/local/cuda/lib64", "/usr/lib/x86_64-linux-gnu"]:
+                if os.path.exists(t_dir):
+                    t_link = os.path.join(t_dir, "libcufft.so.11")
+                    if not os.path.exists(t_link):
+                        try:
+                            os.symlink(c_path, t_link)
+                        except Exception:
+                            pass
+                    break
+            break
+except Exception:
+    pass
 
 # 3. Correctif PyTorch 2.6+ : autorise le chargement des modèles Pyannote (OmegaConf)
 _orig_torch_load = torch.load

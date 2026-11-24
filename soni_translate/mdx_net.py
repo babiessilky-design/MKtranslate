@@ -122,27 +122,42 @@ class MDX:
     def __init__(
         self, model_path: str, params: MDXModel, processor=0
     ):
-        # Set the device and the provider (CPU or CUDA)
-        self.device = (
-            torch.device(f"cuda:{processor}")
-            if processor >= 0
-            else torch.device("cpu")
-        )
-        self.provider = (
-            ["CUDAExecutionProvider"]
-            if processor >= 0
-            else ["CPUExecutionProvider"]
-        )
+        # 1. Sélection sécurisée du provider ONNX Runtime avec repli automatique sur CPU
+        providers = []
+        if processor >= 0 and torch.cuda.is_available():
+            providers.append("CUDAExecutionProvider")
+        providers.append("CPUExecutionProvider")
+
+        try:
+            self.ort = ort.InferenceSession(model_path, providers=providers)
+        except Exception as e_session:
+            logger.warning(f"ONNX Session CUDA indisponible ({e_session}), repli sur CPUExecutionProvider...")
+            self.ort = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+
+        active_providers = self.ort.get_providers()
+        is_cuda_active = "CUDAExecutionProvider" in active_providers and processor >= 0 and torch.cuda.is_available()
+
+        # 2. Aligner strictement le device PyTorch sur celui réellement actif pour éviter de saturer la VRAM
+        if not is_cuda_active:
+            self.device = torch.device("cpu")
+            self.provider = ["CPUExecutionProvider"]
+            params.window = params.window.to("cpu")
+            params.freq_pad = params.freq_pad.to("cpu")
+        else:
+            self.device = torch.device(f"cuda:{processor}")
+            self.provider = ["CUDAExecutionProvider"]
 
         self.model = params
 
-        # Load the ONNX model using ONNX Runtime
-        self.ort = ort.InferenceSession(model_path, providers=self.provider)
         # Preload the model for faster performance
-        self.ort.run(
-            None,
-            {"input": torch.rand(1, 4, params.dim_f, params.dim_t).numpy()},
-        )
+        try:
+            self.ort.run(
+                None,
+                {"input": torch.rand(1, 4, params.dim_f, params.dim_t).numpy()},
+            )
+        except Exception as e_preload:
+            logger.debug(f"Preload ONNX warning: {e_preload}")
+
         self.process = lambda spec: self.ort.run(
             None, {"input": spec.cpu().numpy()}
         )[0]
@@ -356,79 +371,104 @@ def run_mdx(
     m_threads=2,
     device_base="cuda",
 ):
-    if device_base == "cuda":
-        device = torch.device("cuda:0")
-        processor_num = 0
-        device_properties = torch.cuda.get_device_properties(device)
-        vram_gb = device_properties.total_memory / 1024**3
-        m_threads = 1 if vram_gb < 8 else 2
-    else:
-        device = torch.device("cpu")
-        processor_num = -1
-        m_threads = 1
+    try:
+        if device_base == "cuda":
+            device = torch.device("cuda:0")
+            processor_num = 0
+            device_properties = torch.cuda.get_device_properties(device)
+            vram_gb = device_properties.total_memory / 1024**3
+            m_threads = 1 if vram_gb < 8 else 2
+        else:
+            device = torch.device("cpu")
+            processor_num = -1
+            m_threads = 1
 
-    model_hash = MDX.get_hash(model_path)
-    mp = model_params.get(model_hash)
-    model = MDXModel(
-        device,
-        dim_f=mp["mdx_dim_f_set"],
-        dim_t=2 ** mp["mdx_dim_t_set"],
-        n_fft=mp["mdx_n_fft_scale_set"],
-        stem_name=mp["primary_stem"],
-        compensation=mp["compensate"],
-    )
-
-    mdx_sess = MDX(model_path, model, processor=processor_num)
-    wave, sr = librosa.load(filename, mono=False, sr=44100)
-    # normalizing input wave gives better output
-    peak = max(np.max(wave), abs(np.min(wave)))
-    wave /= peak
-    if denoise:
-        wave_processed = -(mdx_sess.process_wave(-wave, m_threads)) + (
-            mdx_sess.process_wave(wave, m_threads)
-        )
-        wave_processed *= 0.5
-    else:
-        wave_processed = mdx_sess.process_wave(wave, m_threads)
-    # return to previous peak
-    wave_processed *= peak
-    stem_name = model.stem_name if suffix is None else suffix
-
-    main_filepath = None
-    if not exclude_main:
-        main_filepath = os.path.join(
-            output_dir,
-            f"{os.path.basename(os.path.splitext(filename)[0])}_{stem_name}.wav",
-        )
-        sf.write(main_filepath, wave_processed.T, sr)
-
-    invert_filepath = None
-    if not exclude_inversion:
-        diff_stem_name = (
-            stem_naming.get(stem_name)
-            if invert_suffix is None
-            else invert_suffix
-        )
-        stem_name = (
-            f"{stem_name}_diff" if diff_stem_name is None else diff_stem_name
-        )
-        invert_filepath = os.path.join(
-            output_dir,
-            f"{os.path.basename(os.path.splitext(filename)[0])}_{stem_name}.wav",
-        )
-        sf.write(
-            invert_filepath,
-            (-wave_processed.T * model.compensation) + wave.T,
-            sr,
+        model_hash = MDX.get_hash(model_path)
+        mp = model_params.get(model_hash)
+        model = MDXModel(
+            device,
+            dim_f=mp["mdx_dim_f_set"],
+            dim_t=2 ** mp["mdx_dim_t_set"],
+            n_fft=mp["mdx_n_fft_scale_set"],
+            stem_name=mp["primary_stem"],
+            compensation=mp["compensate"],
         )
 
-    if not keep_orig:
-        os.remove(filename)
+        mdx_sess = MDX(model_path, model, processor=processor_num)
+        wave, sr = librosa.load(filename, mono=False, sr=44100)
+        # normalizing input wave gives better output
+        peak = max(np.max(wave), abs(np.min(wave)))
+        wave /= peak
+        if denoise:
+            wave_processed = -(mdx_sess.process_wave(-wave, m_threads)) + (
+                mdx_sess.process_wave(wave, m_threads)
+            )
+            wave_processed *= 0.5
+        else:
+            wave_processed = mdx_sess.process_wave(wave, m_threads)
+        # return to previous peak
+        wave_processed *= peak
+        stem_name = model.stem_name if suffix is None else suffix
 
-    del mdx_sess, wave_processed, wave
-    gc.collect()
-    torch.cuda.empty_cache()
-    return main_filepath, invert_filepath
+        main_filepath = None
+        if not exclude_main:
+            main_filepath = os.path.join(
+                output_dir,
+                f"{os.path.basename(os.path.splitext(filename)[0])}_{stem_name}.wav",
+            )
+            sf.write(main_filepath, wave_processed.T, sr)
+
+        invert_filepath = None
+        if not exclude_inversion:
+            diff_stem_name = (
+                stem_naming.get(stem_name)
+                if invert_suffix is None
+                else invert_suffix
+            )
+            stem_name = (
+                f"{stem_name}_diff" if diff_stem_name is None else diff_stem_name
+            )
+            invert_filepath = os.path.join(
+                output_dir,
+                f"{os.path.basename(os.path.splitext(filename)[0])}_{stem_name}.wav",
+            )
+            sf.write(
+                invert_filepath,
+                (-wave_processed.T * model.compensation) + wave.T,
+                sr,
+            )
+
+        if not keep_orig:
+            os.remove(filename)
+
+        del mdx_sess, wave_processed, wave
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        return main_filepath, invert_filepath
+
+    except Exception as e_run:
+        if device_base == "cuda":
+            logger.warning(f"MDX-Net CUDA a rencontré une erreur ({e_run}). Basculement automatique de secours sur CPU...")
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            return run_mdx(
+                model_params,
+                output_dir,
+                model_path,
+                filename,
+                exclude_main=exclude_main,
+                exclude_inversion=exclude_inversion,
+                suffix=suffix,
+                invert_suffix=invert_suffix,
+                denoise=denoise,
+                keep_orig=keep_orig,
+                m_threads=1,
+                device_base="cpu",
+            )
+        else:
+            raise e_run
 
 
 MDX_DOWNLOAD_LINK = "https://huggingface.co/Blane187/all_public_uvr_models/resolve/main/"
