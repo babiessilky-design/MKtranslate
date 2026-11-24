@@ -1343,13 +1343,14 @@ def render_fastdub_video(
 
             elif tts_engine == "fish_audio" and fish_provider:
                 try:
-                    fish_provider.generate(
+                    res_fish = fish_provider.generate(
                         text=tts_text,
                         voice=voice_chosen,
                         target_lang=clean_target_lang,
                         output_file=out_chunk_path
                     )
-                    if os.path.exists(out_chunk_path) and os.path.getsize(out_chunk_path) > 1000:
+                    # Vérifier que la génération a réussi (res_fish=True) et n'est pas un fichier de silence de sécurité
+                    if res_fish and os.path.exists(out_chunk_path) and os.path.getsize(out_chunk_path) > 1000:
                         generated_ok = True
                 except Exception as e_fish:
                     logger.warning(f"FastDub : Fish Audio en échec sur réplique {idx+1} ({e_fish}). Basculement sur Edge-TTS...")

@@ -753,23 +753,41 @@ class Attention(nn.Module):
         k = k.repeat_interleave(self.n_head // self.n_local_heads, dim=1)
         v = v.repeat_interleave(self.n_head // self.n_local_heads, dim=1)
 
+        # Anti-broadcast mismatch guard:
+        # Quand seqlen == 1 (génération autoregressive token par token),
+        # tous les tokens présents dans le KV-cache sont des tokens passés.
+        # Le masque causal est 100% True, donc aucun masquage n'est requis.
+        # Passer use_mask=None élimine l'erreur PyTorch:
+        # "RuntimeError: output with shape [1, 32, 1, 1] doesn't match the broadcast shape [1, 32, 1, N]"
+        use_mask = mask
+        if seqlen == 1 and mask is not None:
+            if mask.all():
+                use_mask = None
+
         if self.use_sdpa:
-            if mask is None:
-                with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+            try:
+                if use_mask is None:
                     y = F.scaled_dot_product_attention(
                         q,
                         k,
                         v,
                         dropout_p=self.dropout if self.training else 0.0,
-                        is_causal=True,
-                        # No third party attn_mask here to use flash_attention
+                        is_causal=False,
                     )
-            else:
-                y = F.scaled_dot_product_attention(
+                else:
+                    y = F.scaled_dot_product_attention(
+                        q,
+                        k,
+                        v,
+                        attn_mask=use_mask,
+                        dropout_p=self.dropout if self.training else 0.0,
+                    )
+            except Exception:
+                y = self.eq_scaled_dot_product_attention(
                     q,
                     k,
                     v,
-                    attn_mask=mask,
+                    attn_mask=use_mask,
                     dropout_p=self.dropout if self.training else 0.0,
                 )
         else:
@@ -777,7 +795,7 @@ class Attention(nn.Module):
                 q,
                 k,
                 v,
-                attn_mask=mask,
+                attn_mask=use_mask,
                 dropout_p=self.dropout if self.training else 0.0,
             )
 
@@ -809,7 +827,7 @@ class Attention(nn.Module):
                 attn_bias = attn_bias + attn_mask
 
         attn_weight = query @ key.transpose(-2, -1) * scale_factor
-        attn_weight += attn_bias
+        attn_weight = attn_weight + attn_bias
         attn_weight = torch.softmax(attn_weight, dim=-1)
         attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
 

@@ -268,7 +268,10 @@ def decode_n_tokens(
         if supports_kv_len:
             decode_kwargs["kv_len"] = kv_start_pos + i + 1
 
-        with sdpa_kernel(SDPBackend.MATH):
+        try:
+            with sdpa_kernel([SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH]):
+                next_token = decode_one_token(**decode_kwargs).clone()
+        except Exception:
             next_token = decode_one_token(**decode_kwargs).clone()
 
         input_pos += 1
