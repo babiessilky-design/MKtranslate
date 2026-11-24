@@ -320,23 +320,29 @@ def generate(
     Takes a conditioning sequence (prompt) as input and continues to generate as many tokens as requested.
     """
 
+    # Optimisation majeure VRAM : limite le KVCache a FISH_MAX_SEQ_LEN (defaut 4096) au lieu de 32768
+    effective_max_seq = getattr(model, "max_seq_len", -1)
+    if effective_max_seq <= 0:
+        env_cap = int(os.environ.get("FISH_MAX_SEQ_LEN", 4096))
+        effective_max_seq = min(model.config.max_seq_len, env_cap)
+
     # create an empty tensor of the expected final shape and fill in the current tokens
     T = prompt.size(1)
     prompt = prompt[None].repeat(num_samples, 1, 1)
 
-    if T >= model.config.max_seq_len:
+    if T >= effective_max_seq:
         raise InvalidInputError(
-            f"Input sequence length {T} exceeds max_seq_len {model.config.max_seq_len}"
+            f"Input sequence length {T} exceeds max_seq_len {effective_max_seq}"
         )
 
     # max_new_tokens <= 0 means up to the context length.
     if max_new_tokens > 0:
-        if T + max_new_tokens > model.config.max_seq_len:
-            max_new_tokens = model.config.max_seq_len - T
+        if T + max_new_tokens > effective_max_seq:
+            max_new_tokens = effective_max_seq - T
 
         T_new = T + max_new_tokens
     else:
-        T_new = model.config.max_seq_len
+        T_new = effective_max_seq
         max_new_tokens = T_new - T
 
     device = prompt.device
@@ -349,7 +355,7 @@ def generate(
         with torch.device(device):
             model.setup_caches(
                 max_batch_size=1,  # Fixed to 1, avoid dynamic changes
-                max_seq_len=model.config.max_seq_len,
+                max_seq_len=effective_max_seq,
                 dtype=next(model.parameters()).dtype,
             )
         model._cache_setup_done = True
@@ -359,7 +365,7 @@ def generate(
     # Create new tensor each time, but try to reuse memory
     input_pos = torch.arange(0, T, device=device, dtype=torch.long)
     empty = torch.empty(
-        (codebook_dim, model.config.max_seq_len), dtype=prompt.dtype, device=device
+        (codebook_dim, effective_max_seq), dtype=prompt.dtype, device=device
     )
     empty[:, :T] = prompt
     seq = empty
@@ -802,7 +808,10 @@ def generate_long(
 
     model_size = sum(p.numel() for p in model.parameters() if p.requires_grad)
     tokenizer = model.tokenizer
-    max_length = model.config.max_seq_len
+    max_length = getattr(model, "max_seq_len", -1)
+    if max_length <= 0:
+        env_cap = int(os.environ.get("FISH_MAX_SEQ_LEN", 4096))
+        max_length = min(model.config.max_seq_len, env_cap)
 
     # Build base conversation with system message
     base_conversation = Conversation()
@@ -913,9 +922,10 @@ def generate_long(
                     f"Audio masks non-zero count: {torch.count_nonzero(audio_masks)}"
                 )
 
-            if encoded.size(1) > max_length - 2048:
+            reserve_tokens = min(max_new_tokens, 512) if max_new_tokens > 0 else 200
+            if encoded.size(1) > max_length - reserve_tokens:
                 raise InvalidInputError(
-                    f"Prompt is too long: {encoded.size(1)} > {max_length - 2048}"
+                    f"Prompt is too long: {encoded.size(1)} > {max_length - reserve_tokens}"
                 )
 
             encoded = encoded.to(device=device)

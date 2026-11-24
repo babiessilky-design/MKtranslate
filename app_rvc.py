@@ -2,6 +2,9 @@
 # MONKEY-PATCH GLOBAL : CUBLAS 12, NATIVE CUDA CONV, TORCH.LOAD & HF HUB
 # ==============================================================================
 import os
+# Optimisation majeure VRAM : élimine la fragmentation CUDA et optimise la mémoire KVCache
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+os.environ["FISH_MAX_SEQ_LEN"] = os.environ.get("FISH_MAX_SEQ_LEN", "4096")
 import sys
 import re
 import types

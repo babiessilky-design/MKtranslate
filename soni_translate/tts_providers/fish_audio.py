@@ -1,4 +1,6 @@
 import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+os.environ["FISH_MAX_SEQ_LEN"] = os.environ.get("FISH_MAX_SEQ_LEN", "4096")
 import sys
 import torch
 import numpy as np
@@ -432,6 +434,7 @@ class FishAudioProvider(BaseTTSProvider):
 
                 # Génération des codes sémantiques Dual-AR en FP16
                 with torch.inference_mode():
+                    max_gen_tokens = min(int(kwargs.get("max_new_tokens", 1024)), 1024)
                     generator = generate_long(
                         model=model,
                         device=self.device,
@@ -440,7 +443,7 @@ class FishAudioProvider(BaseTTSProvider):
                         prompt_text=ref_text or "Voix de reference.",
                         prompt_tokens=[prompt_tokens] if isinstance(prompt_tokens, torch.Tensor) else prompt_tokens,
                         num_samples=1,
-                        max_new_tokens=int(kwargs.get("max_new_tokens", 2048)),
+                        max_new_tokens=max_gen_tokens,
                         top_p=float(kwargs.get("top_p", 0.7)),
                         top_k=int(kwargs.get("top_k", 30)),
                         temperature=float(kwargs.get("temperature", 0.7)),
@@ -452,6 +455,12 @@ class FishAudioProvider(BaseTTSProvider):
                         if resp.action == "sample" and resp.codes is not None and resp.codes.size(1) > 0:
                             chunk = decode_to_audio(resp.codes.to(self.device), decoder)
                             audio_chunks.append(chunk.detach().cpu().float().numpy())
+                            del chunk
+                            del resp.codes
+
+                    del generator
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
                     
                     if audio_chunks:
                         wav_out = np.concatenate(audio_chunks, axis=-1)

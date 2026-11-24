@@ -1110,10 +1110,26 @@ def transcribe_speech(
             result["language"] = "zh"
             logger.info("Langue chinoise standard (zh - Chinois Simplifié)")
 
+    try:
+        if hasattr(model, "model"):
+            inner = model.model
+            if hasattr(inner, "unload_model"):
+                try: inner.unload_model()
+                except TypeError: inner.unload_model(to_cpu=False)
+            elif hasattr(inner, "model") and hasattr(inner.model, "unload_model"):
+                try: inner.model.unload_model()
+                except TypeError: inner.model.unload_model(to_cpu=False)
+    except Exception:
+        pass
+
     del model
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+        try:
+            torch.cuda.ipc_collect()
+        except Exception:
+            pass
     return audio, result
 
 
@@ -1214,10 +1230,25 @@ def align_speech(audio, result):
             raise e_align
     finally:
         if model_a is not None:
+            try:
+                if hasattr(model_a, "model"):
+                    inner = model_a.model
+                    if hasattr(inner, "unload_model"):
+                        try: inner.unload_model()
+                        except TypeError: inner.unload_model(to_cpu=False)
+                    elif hasattr(inner, "model") and hasattr(inner.model, "unload_model"):
+                        try: inner.model.unload_model()
+                        except TypeError: inner.model.unload_model(to_cpu=False)
+            except Exception:
+                pass
             del model_a
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+            try:
+                torch.cuda.ipc_collect()
+            except Exception:
+                pass
 
     # Nettoyage et sécurisation : si un segment n'a pas pu être aligné mot-à-mot,
     # restaurer ses bornes d'origine pour ne pas conserver l'expansion artificielle

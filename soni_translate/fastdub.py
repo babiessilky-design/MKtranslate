@@ -480,6 +480,24 @@ def transcribe_media_to_srt(media_path, asr_model="large-v3", source_lang="en", 
         srt_lines.append(f"{idx}\n{start_str} --> {end_str}\n{text}\n")
 
     shutil.rmtree(temp_dir, ignore_errors=True)
+
+    # Libération immédiate et agressive de la VRAM après transcription et alignement
+    try:
+        import gc
+        import torch
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            try:
+                torch.cuda.ipc_collect()
+            except Exception:
+                pass
+            free_v = torch.cuda.mem_get_info()[0] / (1024 ** 3)
+            tot_v = torch.cuda.mem_get_info()[1] / (1024 ** 3)
+            logger.info(f"FastDub ASR : VRAM libérée avec succès (VRAM libre: {free_v:.2f} Go / {tot_v:.2f} Go).")
+    except Exception:
+        pass
+
     return "\n".join(srt_lines).strip()
 
 
@@ -1246,6 +1264,23 @@ def render_fastdub_video(
     if not dialogues:
         raise ValueError("Aucune réplique valide trouvée dans le script de doublage.")
 
+    # Nettoyage préventif complet de la VRAM avant de lancer la synthèse TTS
+    try:
+        import gc
+        import torch
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            try:
+                torch.cuda.ipc_collect()
+            except Exception:
+                pass
+            free_v = torch.cuda.mem_get_info()[0] / (1024 ** 3)
+            tot_v = torch.cuda.mem_get_info()[1] / (1024 ** 3)
+            logger.info(f"FastDub Render : VRAM préparée pour TTS (VRAM libre: {free_v:.2f} Go / {tot_v:.2f} Go).")
+    except Exception:
+        pass
+
     clean_target_lang = "fr"
     if target_lang:
         raw_t = str(target_lang).lower()
@@ -1466,6 +1501,9 @@ def render_fastdub_video(
             logger.error(f"Erreur synthèse FastDub réplique {idx+1}: {e_tts}")
         finally:
             try:
+                if (idx + 1) % 15 == 0:
+                    import gc
+                    gc.collect()
                 import torch
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
