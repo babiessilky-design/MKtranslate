@@ -352,19 +352,21 @@ class FishAudioProvider(BaseTTSProvider):
         return False
 
     def _ensure_sample_rate_44k(self, output_file, target_sr=44100):
-        """Vérifie et garantit que le fichier WAV produit par Fish Audio est strictement à 44100 Hz."""
+        """Vérifie et garantit que le fichier WAV produit par Fish Audio est strictement à 44100 Hz et optimisé en volume."""
         if not os.path.exists(output_file) or os.path.getsize(output_file) < 500:
             return
         try:
             import soundfile as sf
-            info = sf.info(output_file)
-            if info.samplerate != target_sr:
+            data, cur_sr = sf.read(output_file)
+            if data.ndim > 1:
+                data = data.mean(axis=1)
+            if cur_sr != target_sr:
                 import librosa
-                data, cur_sr = sf.read(output_file)
-                if data.ndim > 1:
-                    data = data.mean(axis=1)
                 data = librosa.resample(data, orig_sr=cur_sr, target_sr=target_sr)
-                sf.write(output_file, data, target_sr)
+            max_v = float(np.abs(data).max()) if len(data) > 0 else 0.0
+            if max_v > 0.001:
+                data = (data / max_v) * 0.96
+            sf.write(output_file, data, target_sr)
         except Exception as e:
             self.logger.debug(f"Vérification sample rate Fish Audio: {e}")
 
@@ -467,11 +469,11 @@ class FishAudioProvider(BaseTTSProvider):
                     else:
                         wav_out = np.array([], dtype=np.float32)
 
-                # Normalisation anti-clipping
+                # Normalisation et amplification dynamique haute-fidélité à 0.96 (-0.35 dB)
                 if wav_out is not None and getattr(wav_out, "size", len(wav_out)) > 0:
                     max_val = float(np.abs(wav_out).max())
-                    if max_val > 1.0:
-                        wav_out = wav_out / max_val * 0.98
+                    if max_val > 0.001:
+                        wav_out = (wav_out / max_val) * 0.96
                     os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
                     sf.write(output_file, wav_out, sample_rate)
                     return True

@@ -1251,6 +1251,7 @@ def render_fastdub_video(
     tts_engine="fish_audio",
     target_lang="fr",
     voiceless_track=True,
+    voice_volume=1.35,
     background_volume=0.85,
     progress=None
 ):
@@ -1541,10 +1542,10 @@ def render_fastdub_video(
             except Exception:
                 pass
 
-    # Normalisation de la piste voix
-    max_amp = float(np.abs(master_audio).max())
-    if max_amp > 0.98:
-        master_audio = master_audio / max_amp * 0.95
+    # Normalisation optimale de la piste voix complète à -0.35 dB (0.96)
+    max_amp = float(np.abs(master_audio).max()) if len(master_audio) > 0 else 0.0
+    if max_amp > 0.001:
+        master_audio = (master_audio / max_amp) * 0.96
 
     dubbed_vocals_wav = os.path.join(work_dir, "master_dubbed_vocals.wav")
     sf.write(dubbed_vocals_wav, master_audio, target_sr)
@@ -1558,36 +1559,48 @@ def render_fastdub_video(
             progress(0.88, desc="Extraction de secours de la piste sans voix (IA UVR)...")
         voiceless_bg_path = extract_fastdub_voiceless_track(media_path, work_dir, progress=progress)
 
+    vol_bg = f"{background_volume:.2f}" if background_volume else "0.85"
+    vol_voc = f"{voice_volume:.2f}" if voice_volume else "1.35"
+
     if use_voiceless and voiceless_bg_path and os.path.exists(voiceless_bg_path):
         if progress:
             progress(0.92, desc="Mixage de la musique et bruitages avec le doublage...")
-        logger.info("FastDub Mixage : Fusion de la piste sans voix (UVR) et du doublage vocal...")
-        vol_bg = f"{background_volume:.2f}" if background_volume else "0.85"
+        logger.info(f"FastDub Mixage : Fusion de la piste sans voix (vol={vol_bg}) et du doublage vocal (vol={vol_voc})...")
         cmd_mix = [
             "ffmpeg", "-y",
             "-i", voiceless_bg_path,
             "-i", dubbed_vocals_wav,
-            "-filter_complex", f"[0:a]volume={vol_bg}[bg];[1:a]volume=1.0[voc];[bg][voc]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+            "-filter_complex", f"[0:a]volume={vol_bg}[bg];[1:a]volume={vol_voc}[voc];[bg][voc]amix=inputs=2:duration=first:dropout_transition=2[aout]",
             "-map", "[aout]",
             "-ac", "2", "-ar", "44100",
             mixed_audio_wav
         ]
         subprocess.run(cmd_mix, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
     elif use_voiceless:
-        logger.warning("FastDub Mixage : Piste UVR indisponible, repli sur l'atténuation sonore standard.")
+        logger.warning(f"FastDub Mixage : Piste UVR indisponible, repli sur l'atténuation sonore standard (voix vol={vol_voc}).")
         cmd_mix = [
             "ffmpeg", "-y",
             "-i", media_path,
             "-i", dubbed_vocals_wav,
-            "-filter_complex", "[0:a]volume=0.15[bg];[bg][1:a]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+            "-filter_complex", f"[0:a]volume=0.15[bg];[bg][1:a]volume={vol_voc}[voc];[bg][voc]amix=inputs=2:duration=first:dropout_transition=2[aout]",
             "-map", "[aout]",
             "-ac", "2", "-ar", "44100",
             mixed_audio_wav
         ]
         subprocess.run(cmd_mix, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
     else:
-        logger.info("FastDub Mixage : Piste sans voix désactivée. Doublage voix solo uniquement.")
-        mixed_audio_wav = dubbed_vocals_wav
+        logger.info(f"FastDub Mixage : Piste sans voix désactivée. Doublage voix solo (vol={vol_voc}).")
+        if voice_volume and float(voice_volume) != 1.0:
+            cmd_boost = [
+                "ffmpeg", "-y",
+                "-i", dubbed_vocals_wav,
+                "-filter:a", f"volume={vol_voc}",
+                "-ac", "2", "-ar", "44100",
+                mixed_audio_wav
+            ]
+            subprocess.run(cmd_boost, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        else:
+            mixed_audio_wav = dubbed_vocals_wav
 
     def has_video_stream(fpath):
         cmd = [

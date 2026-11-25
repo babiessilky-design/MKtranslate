@@ -3002,6 +3002,14 @@ def create_gui(theme, logs_in_gui=False):
                             label="Piste sans voix (IA UVR)",
                             info="Supprime 100% des voix originales (UVR-MDX-Net) et préserve les musiques et bruitages de fond."
                         )
+                        fastdub_voice_volume = gr.Slider(
+                            minimum=0.5,
+                            maximum=2.5,
+                            step=0.05,
+                            value=1.35,
+                            label="Volume des voix doublées",
+                            info="Multiplicateur de volume des voix IA (Fish Audio / Chatterbox) pour ressortir au-dessus de la musique."
+                        )
 
                     btn_fastdub_render = gr.Button("🎬 4. Générer le Doublage & le Média Final 🚀", variant="primary")
                     fastdub_status_render = gr.Markdown("")
@@ -3073,7 +3081,7 @@ def create_gui(theme, logs_in_gui=False):
                     f.write(cleaned_srt)
                 return translated, cleaned_srt, gr.update(value=srt_path, visible=True)
 
-            def run_fastdub_render(media_path, script_text, fr_script_text, clean_script_text, spk1_voice, spk2_voice, tts_engine, target_lang, voiceless_track, progress=gr.Progress()):
+            def run_fastdub_render(media_path, script_text, fr_script_text, clean_script_text, spk1_voice, spk2_voice, tts_engine, target_lang, voiceless_track, voice_volume=1.35, progress=gr.Progress()):
                 if not media_path:
                     raise gr.Error("Fichier vidéo ou audio source manquant.")
                 active_script = (script_text or "").strip()
@@ -3096,6 +3104,7 @@ def create_gui(theme, logs_in_gui=False):
                     tts_engine=tts_engine,
                     target_lang=target_lang,
                     voiceless_track=bool(voiceless_track),
+                    voice_volume=float(voice_volume) if voice_volume else 1.35,
                     progress=progress
                 )
                 is_vid = str(out_media).lower().endswith((".mp4", ".mkv", ".mov", ".avi", ".webm"))
@@ -3145,7 +3154,8 @@ def create_gui(theme, logs_in_gui=False):
                     fastdub_spk2_voice,
                     fastdub_tts_engine,
                     fastdub_target_lang,
-                    fastdub_voiceless_track
+                    fastdub_voiceless_track,
+                    fastdub_voice_volume
                 ],
                 outputs=[fastdub_video_output, fastdub_audio_output, fastdub_srt_output, fastdub_status_render]
             )
