@@ -732,7 +732,10 @@ def _call_gemini_or_groq_srt(input_text, sys_instruction, model_name="gemini-3.5
     from google import genai
     from google.genai import types
 
-    candidates = [model_name, "gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"]
+    candidates = []
+    for cand in [model_name, "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"]:
+        if cand and cand not in candidates:
+            candidates.append(cand)
     last_err = None
 
     for key in keys:

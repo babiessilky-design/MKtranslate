@@ -2949,7 +2949,9 @@ def create_gui(theme, logs_in_gui=False):
                             value="English (en)",
                             label="Langue d'origine"
                         )
-                    btn_fastdub_transcribe = gr.Button("⚡ 1. Extraire les dialogues (Whisper)", variant="primary")
+                    with gr.Row():
+                        btn_fastdub_all_in_one = gr.Button("🚀 Doublage Automatique Complet (1-Clic)", variant="primary", scale=2)
+                        btn_fastdub_transcribe = gr.Button("⚡ 1. Extraire les dialogues uniquement", variant="secondary", scale=1)
                     fastdub_status_asr = gr.Markdown("")
 
             gr.HTML("<hr style='margin: 15px 0;'>")
@@ -2966,8 +2968,8 @@ def create_gui(theme, logs_in_gui=False):
                     with gr.Row():
                         btn_fastdub_adapt_gemini = gr.Button("⚡ 2. Adapter en Français ➡️", variant="primary")
                         fastdub_gemini_model = gr.Dropdown(
-                            ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"],
-                            value="gemini-3.5-flash-lite",
+                            ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-3.5-flash-lite"],
+                            value="gemini-2.5-flash",
                             label="Modèle d'adaptation"
                         )
 
@@ -3078,7 +3080,84 @@ def create_gui(theme, logs_in_gui=False):
                 
                 progress(0.1, desc="Extraction audio et transcription Whisper...")
                 srt_res = transcribe_media_to_srt(vpath, asr_model=asr_model, source_lang=clean_lang)
-                return srt_res, "✅ **Transcription terminée avec succès !** Vous pouvez adapter le script en français à droite."
+                nb_seg = len(re.findall(r'\d{1,2}:\d{2}:\d{2}', srt_res))
+                logger.info(f"FastDub ASR : ✅ Étape 1/3 terminée avec succès ({nb_seg} dialogues extraits) !")
+                logger.info("FastDub ASR : 👉 Le texte brut a été copié dans la boîte '1. Transcription brute (SRT)'.")
+                logger.info("FastDub ASR : 👉 Étape suivante : Cliquez maintenant sur le bouton '⚡ 2. Adapter en Français ➡️' !")
+                return srt_res, f"✅ **Étape 1 terminée avec succès ({nb_seg} dialogues extraits) !**\n\n👉 **Cliquez maintenant sur '⚡ 2. Adapter en Français ➡️'** juste ci-dessous pour adapter les dialogues."
+
+            def run_fastdub_all_in_one(
+                media_path, asr_model, src_lang, gemini_model, target_lang,
+                spk1_voice, spk2_voice, tts_engine, voiceless_track, voice_volume=1.35,
+                progress=gr.Progress()
+            ):
+                if not media_path:
+                    raise gr.Error("Veuillez d'abord fournir une vidéo ou un fichier audio.")
+                if isinstance(media_path, list):
+                    media_path = media_path[0]
+                vpath = media_path if isinstance(media_path, str) else getattr(media_path, "name", str(media_path))
+
+                from soni_translate.fastdub import (
+                    transcribe_media_to_srt,
+                    adapt_script_gemini,
+                    translate_dubbing_script,
+                    render_fastdub_video,
+                    clean_script_to_pure_srt
+                )
+
+                # Étape 1 : Transcription Whisper
+                progress(0.05, desc="[1/3] Extraction audio et transcription Whisper...")
+                clean_lang = "en"
+                sl = str(src_lang).lower()
+                if "fr" in sl: clean_lang = "fr"
+                elif "es" in sl: clean_lang = "es"
+                elif "zh" in sl or "chin" in sl: clean_lang = "zh"
+                elif "auto" in sl: clean_lang = "auto"
+                srt_text = transcribe_media_to_srt(vpath, asr_model=asr_model, source_lang=clean_lang)
+                if not srt_text or not srt_text.strip():
+                    raise gr.Error("La transcription n'a produit aucun texte.")
+
+                # Étape 2 : Adaptation Gemini
+                progress(0.35, desc="[2/3] Adaptation intelligente des dialogues en français...")
+                adapted_fr = adapt_script_gemini(srt_text, model_name=gemini_model)
+                final_script = adapted_fr
+                if "fr" not in str(target_lang).lower() and "français" not in str(target_lang).lower():
+                    progress(0.45, desc=f"[2/3] Traduction vers {target_lang}...")
+                    final_script = translate_dubbing_script(adapted_fr, target_lang=target_lang, model_name=gemini_model)
+
+                # Étape 3 : Synthèse vocale & rendu média final
+                progress(0.50, desc="[3/3] Rendu du doublage et mixage audio/vidéo...")
+                out_media = render_fastdub_video(
+                    media_path=vpath,
+                    script_text=final_script,
+                    speaker1_voice=spk1_voice,
+                    speaker2_voice=spk2_voice,
+                    tts_engine=tts_engine,
+                    target_lang=target_lang,
+                    voiceless_track=bool(voiceless_track),
+                    voice_volume=float(voice_volume) if voice_volume else 1.35,
+                    progress=progress
+                )
+
+                is_vid = str(out_media).lower().endswith((".mp4", ".mkv", ".mov", ".avi", ".webm"))
+                base_name = os.path.splitext(os.path.basename(vpath))[0]
+                clean_srt_content = clean_script_to_pure_srt(final_script)
+                out_dir = "outputs"
+                os.makedirs(out_dir, exist_ok=True)
+                final_srt_path = os.path.join(out_dir, f"{base_name}_youtube_subtitles.srt")
+                with open(final_srt_path, "w", encoding="utf-8") as f:
+                    f.write(clean_srt_content)
+
+                stat = "🎉 **Doublage Automatique Complet terminé avec succès !** Média final disponible ci-dessous."
+                return (
+                    srt_text,
+                    adapted_fr,
+                    final_script,
+                    out_media if is_vid else None,
+                    out_media if not is_vid else None,
+                    gr.update(value=final_srt_path, visible=True),
+                    stat
+                )
 
             def run_fastdub_adapt(srt_text, model_name, target_lang, progress=gr.Progress()):
                 if not srt_text or not srt_text.strip():
@@ -3123,7 +3202,7 @@ def create_gui(theme, logs_in_gui=False):
                     f.write(cleaned_srt)
                 return translated, cleaned_srt, gr.update(value=srt_path, visible=True)
 
-            def run_fastdub_render(media_path, script_text, fr_script_text, clean_script_text, spk1_voice, spk2_voice, tts_engine, target_lang, voiceless_track, voice_volume=1.35, progress=gr.Progress()):
+            def run_fastdub_render(media_path, script_text, fr_script_text, clean_script_text, raw_srt_text, spk1_voice, spk2_voice, tts_engine, target_lang, voiceless_track, voice_volume=1.35, progress=gr.Progress()):
                 if not media_path:
                     raise gr.Error("Fichier vidéo ou audio source manquant.")
                 active_script = (script_text or "").strip()
@@ -3131,6 +3210,8 @@ def create_gui(theme, logs_in_gui=False):
                     active_script = (clean_script_text or "").strip()
                 if not active_script:
                     active_script = (fr_script_text or "").strip()
+                if not active_script:
+                    active_script = (raw_srt_text or "").strip()
                 if not active_script:
                     raise gr.Error("Le script de doublage est vide. Veuillez coller votre script dans une des boîtes avant de lancer le rendu.")
                 script_text = active_script
@@ -3160,6 +3241,31 @@ def create_gui(theme, logs_in_gui=False):
                     f.write(clean_srt_content)
 
                 return (out_media if is_vid else None), (out_media if not is_vid else None), gr.update(value=final_srt_path, visible=True), "🎉 **Doublage FastDub terminé avec succès !**"
+
+            btn_fastdub_all_in_one.click(
+                fn=run_fastdub_all_in_one,
+                inputs=[
+                    fastdub_media_input,
+                    fastdub_asr_model,
+                    fastdub_src_lang,
+                    fastdub_gemini_model,
+                    fastdub_target_lang,
+                    fastdub_spk1_voice,
+                    fastdub_spk2_voice,
+                    fastdub_tts_engine,
+                    fastdub_voiceless_track,
+                    fastdub_voice_volume
+                ],
+                outputs=[
+                    fastdub_srt_box,
+                    fastdub_fr_script_box,
+                    fastdub_final_script_box,
+                    fastdub_video_output,
+                    fastdub_audio_output,
+                    fastdub_srt_output,
+                    fastdub_status_render
+                ]
+            )
 
             btn_fastdub_transcribe.click(
                 fn=run_fastdub_transcribe,
@@ -3192,6 +3298,7 @@ def create_gui(theme, logs_in_gui=False):
                     fastdub_final_script_box,
                     fastdub_fr_script_box,
                     fastdub_clean_srt_box,
+                    fastdub_srt_box,
                     fastdub_spk1_voice,
                     fastdub_spk2_voice,
                     fastdub_tts_engine,
