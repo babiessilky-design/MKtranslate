@@ -506,22 +506,54 @@ def patched_audio_segmentation_to_voice(result_diarize, TRANSLATE_AUDIO_TO, is_g
                 logger.error(f"Kokoro Error: {str(e)}")
                 
         # LOGIQUE GEMINI
-        elif voice.startswith("Gemini/"):
-            gemini_voice = voice.split("/")[-1]
+        elif voice.startswith("Gemini/") or voice.startswith("gemini/"):
             try:
-                api_key = (os.getenv("GOOGLE_API_KEY") or os.getenv("google_api_key") or "").split(',')[0].strip()
-                gemini_model = os.getenv("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts")
-                client = genai.Client(api_key=api_key)
-                config = types.GenerateContentConfig(
-                    response_modalities=["AUDIO"],
-                    speech_config={"voice_config": {"prebuilt_voice_config": {"voice_name": gemini_voice}}}
-                )
-                response = client.models.generate_content(model=gemini_model, contents=text, config=config)
-                with open(output_file, "wb") as f:
-                    f.write(response.candidates[0].content.parts[0].inline_data.data)
-                generated_successfully = True
+                from soni_translate.tts_providers.gemini_tts import GeminiTTSProvider
+                gemini_prov = GeminiTTSProvider()
+                generated_successfully = bool(gemini_prov.generate(
+                    text=text,
+                    voice=voice,
+                    target_lang=TRANSLATE_AUDIO_TO,
+                    output_file=output_file
+                ))
             except Exception as e:
-                logger.error(f"Gemini Error: {str(e)}")
+                logger.error(f"Gemini Error via Provider: {str(e)}")
+                # Repli de secours direct blindé
+                try:
+                    api_key = (os.getenv("GOOGLE_API_KEY") or os.getenv("google_api_key") or os.getenv("GEMINI_API_KEY") or "").split(',')[0].strip()
+                    gemini_model = os.getenv("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts")
+                    client = genai.Client(api_key=api_key)
+                    clean_v = voice.split("/")[-1].strip()
+                    if clean_v.lower() == "fawkes":
+                        clean_v = "Charon"
+                    config = types.GenerateContentConfig(
+                        response_modalities=["AUDIO"],
+                        speech_config={"voice_config": {"prebuilt_voice_config": {"voice_name": clean_v}}}
+                    )
+                    response = client.models.generate_content(model=gemini_model, contents=text, config=config)
+                    pcm_bytes = None
+                    for c in getattr(response, "candidates", []):
+                        for p in getattr(getattr(c, "content", None), "parts", []):
+                            if getattr(p, "inline_data", None) and p.inline_data.data:
+                                pcm_bytes = p.inline_data.data
+                                break
+                        if pcm_bytes:
+                            break
+                    if pcm_bytes:
+                        if pcm_bytes.startswith(b"RIFF"):
+                            with open(output_file, "wb") as f:
+                                f.write(pcm_bytes)
+                        else:
+                            if len(pcm_bytes) % 2 != 0:
+                                pcm_bytes = pcm_bytes[:-1]
+                            raw_arr = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+                            m_val = np.max(np.abs(raw_arr))
+                            if m_val > 0.001:
+                                raw_arr = raw_arr * (0.96 / m_val)
+                            sf.write(output_file, raw_arr, 24000)
+                        generated_successfully = True
+                except Exception as e_sec:
+                    logger.error(f"Gemini Direct Fallback Error: {str(e_sec)}")
                 
         # LOGIQUE ELEVENLABS
         elif voice.startswith("ElevenLabs/"):
@@ -770,11 +802,15 @@ class TTS_Info:
             "Kokoro/zf_xiaobei", # Femme (ZH)
             "Kokoro/zm_yunjian", # Homme (ZH)
             
-            # --- GEMINI TTS ---
-            "Gemini/Aoede",      # Femme
-            "Gemini/Puck",       # Homme
-            "Gemini/Kore",       # Neutre / Femme
-            "Gemini/Fawkes",     # Neutre / Homme
+            # --- GEMINI TTS (Cloud Google Ultra-Naturel) ---
+            "Gemini/Puck",       # Homme (Dynamique & Expressif)
+            "Gemini/Charon",     # Homme (Grave & Posé)
+            "Gemini/Fenrir",     # Homme (Énergique & Puissant)
+            "Gemini/Orus",       # Homme (Confiant & Direct)
+            "Gemini/Aoede",      # Femme (Chaleureuse & Naturelle)
+            "Gemini/Kore",       # Femme (Douce & Calme)
+            "Gemini/Leda",       # Femme (Claire & Articulée)
+            "Gemini/Zephyr",     # Neutre / Expressif
             
             # --- ELEVENLABS ---
             "ElevenLabs/Rachel",
@@ -1134,8 +1170,9 @@ class SoniTranslate(SoniTrCache):
             check_openai_api_key()
             
         # --- AJOUT POUR GEMINI ET GROQ ---
-        if ("gemini" in translate_process.lower() or transcriber_model == "Gemini 3.5 Transcribe") and not os.environ.get("GOOGLE_API_KEY"):
-            raise ValueError("Erreur : La clé API Google (Gemini) est manquante. Assurez-vous de définir la variable d'environnement GOOGLE_API_KEY.")
+        has_gemini_key = bool(os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("google_api_key") or os.environ.get("gemini_api_key"))
+        if ("gemini" in translate_process.lower() or transcriber_model == "Gemini 3.5 Transcribe") and not has_gemini_key:
+            raise ValueError("Erreur : La clé API Google (Gemini) est manquante. Assurez-vous de définir GOOGLE_API_KEY ou GEMINI_API_KEY.")
             
         if "groq" in translate_process.lower() and not os.environ.get("GROQ_API_KEY"):
             raise ValueError("Erreur : La clé API Groq est manquante. Assurez-vous de définir la variable d'environnement GROQ_API_KEY.")
@@ -2753,10 +2790,10 @@ def create_gui(theme, logs_in_gui=False):
                                 interactive=True
                             )
                             gemini_tts_model_gui = gr.Dropdown(
-                                choices=["gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts"],
+                                choices=["gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts", "gemini-2.0-flash"],
                                 value="gemini-2.5-flash-preview-tts",
                                 label="Gemini TTS Model Variant",
-                                info="Sélectionnez la variante de modèle à utiliser pour les voix commençant par 'Gemini/'.",
+                                info="Variante du modèle Google Gemini TTS (2.5 Flash Preview recommandé).",
                                 interactive=True
                             )
                             custom_cloning_engine_gui = gr.Dropdown(
@@ -2996,7 +3033,12 @@ def create_gui(theme, logs_in_gui=False):
                         fastdub_spk2_voice = gr.Dropdown(fastdub_voices_list, value=default_v2, label="Speaker 2 (Femme)")
                     
                     with gr.Row():
-                        fastdub_tts_engine = gr.Dropdown(["fish_audio", "edge_tts", "chatterbox"], value="fish_audio", label="Moteur TTS")
+                        fastdub_tts_engine = gr.Dropdown(
+                            ["fish_audio", "gemini", "edge_tts", "chatterbox"],
+                            value="fish_audio",
+                            label="Moteur TTS",
+                            info="Moteur de synthèse : Fish Audio (clonage FP16 local), Gemini TTS (Google Cloud audio), Edge-TTS ou Chatterbox."
+                        )
                         fastdub_voiceless_track = gr.Checkbox(
                             value=True,
                             label="Piste sans voix (IA UVR)",
@@ -4058,11 +4100,15 @@ if __name__ == "__main__":
             "Kokoro/zf_xiaobei", # Femme (ZH)
             "Kokoro/zm_yunjian", # Homme (ZH)
             
-            # --- GEMINI TTS ---
-            "Gemini/Aoede",      # Femme
-            "Gemini/Puck",       # Homme
-            "Gemini/Kore",       # Neutre / Femme
-            "Gemini/Fawkes",     # Neutre / Homme
+            # --- GEMINI TTS (Cloud Google Ultra-Naturel) ---
+            "Gemini/Puck",       # Homme (Dynamique & Expressif)
+            "Gemini/Charon",     # Homme (Grave & Posé)
+            "Gemini/Fenrir",     # Homme (Énergique & Puissant)
+            "Gemini/Orus",       # Homme (Confiant & Direct)
+            "Gemini/Aoede",      # Femme (Chaleureuse & Naturelle)
+            "Gemini/Kore",       # Femme (Douce & Calme)
+            "Gemini/Leda",       # Femme (Claire & Articulée)
+            "Gemini/Zephyr",     # Neutre / Expressif
             
             # --- ELEVENLABS ---
             "ElevenLabs/Rachel",

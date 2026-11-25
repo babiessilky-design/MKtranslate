@@ -460,17 +460,19 @@ _ACTIVE_KEY_INDEX = 0
 _LAST_GEMINI_CALL_TIME = 0.0
 
 def get_gemini_api_keys():
-    """Récupère une ou plusieurs clés d'API Google Gemini (supporte le multi-clés séparé par virgule)."""
-    raw = os.getenv("GOOGLE_API_KEY") or os.getenv("google_api_key") or ""
+    """Récupère une ou plusieurs clés d'API Google Gemini (supporte GOOGLE_API_KEY et GEMINI_API_KEY, multi-clés séparé par virgule)."""
     keys = []
-    for part in re.split(r'[,;\n]+', raw):
-        k = part.strip()
-        if k and k not in keys:
-            keys.append(k)
+    for var_name in ["GOOGLE_API_KEY", "google_api_key", "GEMINI_API_KEY", "gemini_api_key"]:
+        raw = os.getenv(var_name) or ""
+        for part in re.split(r'[,;\n]+', raw):
+            k = part.strip()
+            if k and k not in keys:
+                keys.append(k)
     for i in range(1, 10):
-        extra = os.getenv(f"GOOGLE_API_KEY_{i}") or os.getenv(f"google_api_key_{i}")
-        if extra and extra.strip() and extra.strip() not in keys:
-            keys.append(extra.strip())
+        for prefix in ["GOOGLE_API_KEY", "google_api_key", "GEMINI_API_KEY", "gemini_api_key"]:
+            extra = os.getenv(f"{prefix}_{i}")
+            if extra and extra.strip() and extra.strip() not in keys:
+                keys.append(extra.strip())
     return keys
 
 def _wait_for_gemini_pacing(min_interval=4.3):

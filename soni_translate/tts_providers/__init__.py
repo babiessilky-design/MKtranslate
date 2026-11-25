@@ -5,10 +5,17 @@ except ImportError:
     FishAudioProvider = None
     FishAudioTTSProvider = None
 
+try:
+    from .gemini_tts import GeminiTTSProvider
+except ImportError:
+    GeminiTTSProvider = None
+
 # Enregistrement de nos Providers actifs
 PROVIDERS_REGISTRY = {
     "Custom": CustomCloningProvider(),
     "FishAudio": None,  # Lazy loaded if needed
+    "Gemini": GeminiTTSProvider() if GeminiTTSProvider else None,
+    "gemini": GeminiTTSProvider() if GeminiTTSProvider else None,
 }
 
 def get_provider(voice_name):

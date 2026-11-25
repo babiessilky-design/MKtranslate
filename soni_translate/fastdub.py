@@ -104,6 +104,16 @@ def get_fastdub_voices():
         "fr-FR-EloiseNeural (Edge-TTS Femme)"
     ]
 
+    gemini_popular = [
+        "Gemini/Puck (Gemini Homme)",
+        "Gemini/Charon (Gemini Homme Grave)",
+        "Gemini/Fenrir (Gemini Homme Énergique)",
+        "Gemini/Aoede (Gemini Femme)",
+        "Gemini/Kore (Gemini Femme Douce)",
+        "Gemini/Leda (Gemini Femme Claire)",
+        "Gemini/Zephyr (Gemini Neutre)"
+    ]
+
     ordered = []
     # Voix personnalisées prioritaires si présentes
     for pref in ["ref_homme_fr", "ref_femme_fr"]:
@@ -112,6 +122,11 @@ def get_fastdub_voices():
     for v in voices:
         if v not in ordered:
             ordered.append(v)
+
+    # Ajout des voix Gemini TTS
+    for gv in gemini_popular:
+        if gv not in ordered:
+            ordered.append(gv)
 
     # Ajout des voix Edge-TTS
     for ev in edge_popular:
@@ -1350,6 +1365,7 @@ def render_fastdub_video(
     # Initialisation du TTS Provider
     fish_provider = None
     chatterbox_provider = None
+    gemini_provider = None
     if tts_engine == "fish_audio":
         try:
             from soni_translate.tts_providers.fish_audio import FishAudioProvider
@@ -1369,6 +1385,18 @@ def render_fastdub_video(
                 logger.info("FastDub : Initialisation du provider Chatterbox Multilingual...")
             except Exception as e_cb:
                 logger.error(f"FastDub : Impossible de charger Chatterbox ({e_cb}).")
+    elif tts_engine == "gemini" or any("gemini" in str(v).lower() for v in [speaker1_voice, speaker2_voice]):
+        try:
+            from soni_translate.tts_providers.gemini_tts import GeminiTTSProvider
+            gemini_provider = GeminiTTSProvider()
+            logger.info("FastDub : Initialisation du provider Gemini TTS...")
+        except ImportError:
+            try:
+                from .tts_providers.gemini_tts import GeminiTTSProvider
+                gemini_provider = GeminiTTSProvider()
+                logger.info("FastDub : Initialisation du provider Gemini TTS...")
+            except Exception as e_gem:
+                logger.error(f"FastDub : Impossible de charger Gemini TTS ({e_gem}).")
 
     total_diag = len(dialogues)
     last_speaker_end_sample = {}
@@ -1389,7 +1417,33 @@ def render_fastdub_video(
 
         generated_ok = False
         try:
-            if tts_engine == "chatterbox" and chatterbox_provider:
+            # Branche Gemini TTS (sélection explicite du moteur ou de la voix)
+            is_gemini = (tts_engine == "gemini") or (voice_chosen and "gemini" in str(voice_chosen).lower())
+            if is_gemini:
+                if not gemini_provider:
+                    try:
+                        from soni_translate.tts_providers.gemini_tts import GeminiTTSProvider
+                        gemini_provider = GeminiTTSProvider()
+                    except Exception:
+                        pass
+                if gemini_provider:
+                    try:
+                        gem_v = voice_chosen
+                        if not gem_v or "neural" in str(gem_v).lower() or not "gemini" in str(gem_v).lower():
+                            gem_v = "Gemini/Aoede" if diag["speaker"] == 2 else "Gemini/Puck"
+                        logger.info(f"FastDub Gemini TTS : Synthèse réplique {idx+1}/{total_diag} ({tts_text[:35]}...) [{gem_v}]")
+                        res_gem = gemini_provider.generate(
+                            text=tts_text,
+                            voice=gem_v,
+                            target_lang=clean_target_lang,
+                            output_file=out_chunk_path
+                        )
+                        if res_gem and os.path.exists(out_chunk_path) and os.path.getsize(out_chunk_path) > 1000:
+                            generated_ok = True
+                    except Exception as e_gem_synth:
+                        logger.warning(f"FastDub : Gemini TTS en échec sur réplique {idx+1} ({e_gem_synth}). Basculement sur Edge-TTS...")
+
+            elif tts_engine == "chatterbox" and chatterbox_provider:
                 try:
                     cb_voice = voice_chosen
                     if not cb_voice or "neural" in str(cb_voice).lower() or "(" in str(cb_voice):
